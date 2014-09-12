@@ -5,8 +5,6 @@
 extern "C" {
 #endif
 
-#include "le_queue.h"
-
 #if defined(_WIN32)
 # include "le_win.h"
 #elif defined(__linux__)
@@ -15,7 +13,15 @@ extern "C" {
 # error Dont support this platform!
 #endif
 
-typedef long long le_time_t;
+#include "le_queue.h"
+#include "le_safeQueue.h"
+
+#define LE_OK 0
+#define LE_ERROR -1
+
+#define LE_EVENTS_LIMIT 4096
+
+typedef unsigned long le_time_t;
 
 struct le_Timer;
 struct le_Channel;
@@ -36,9 +42,6 @@ typedef void (*le_channelCloseCB)(struct le_Channel* channel);
 
 #define LE_CONTAINING_RECORD(ptr, type, field) \
 	((type*) ((char*)(ptr) - ((char*) &((type*)0)->field)))
-
-#define LE_OK 0
-#define LE_ERROR -1
 
 typedef struct le_BaseReq
 {
@@ -63,11 +66,11 @@ typedef struct le_ConnectReq
 typedef struct le_TcpServer
 {
 	LE_PLATFORM_SERVER_FIELDS
-	struct le_EventLoop* loop;
+	void* data;
 	unsigned masks;
+	struct le_EventLoop* loop;
 	le_serverCloseCB closeCB;
 	le_connectionCB connectionCB;
-	void* data;
 } le_TcpServer;
 
 typedef struct le_TcpConnection
@@ -87,22 +90,23 @@ typedef struct le_TcpConnection
 
 typedef struct le_Timer
 {
-	le_time_t timeout;
-	le_time_t repeat;
+	void* data;
 	unsigned index;
 	unsigned masks;
+	le_time_t timeout;
+	le_time_t repeat;
 	struct le_EventLoop* loop;
 	le_timerCB timerCB;
-	void* data;
 } le_Timer;
 
 typedef struct le_Channel
 {
-	LE_PLATFORM_CHANNEL_FIELDS
-	struct le_EventLoop* loop;
-	unsigned masks;
 	void* data;
+	unsigned masks;
+	volatile long pending;
+	struct le_EventLoop* loop;
 	le_Queue channelNode;
+	le_Queue pendingNode;
 	le_channelCB channelCB;
 	le_channelCloseCB closeCB;
 } le_Channel;
@@ -110,12 +114,14 @@ typedef struct le_Channel
 typedef struct le_EventLoop
 {
 	LE_PLATFORM_LOOP_FIELDS
-	le_Queue connectionsHead;
-	le_Queue channelHead;
-	unsigned eventsCount;
+	void* data;
 	le_time_t time;
 	int errorCode;
-	void* data;
+	unsigned eventsCount;
+	le_Queue channelHead;
+	le_Queue connectionsHead;
+	volatile long posting;
+	le_safeQueueHead pendingChannels;
 	struct le_TimerHeap* timerHeap;
 	le_TcpServer* server;
 } le_EventLoop;
@@ -161,19 +167,26 @@ void le_run(le_EventLoop* loop);
 const char* le_strerror(int err);
 int le_getErrorCode(le_EventLoop* loop);
 
+// thread
 typedef pthread_t le_pthread;
 #define le_pthreadSelf() pthread_self()
 #define le_pthreadCreate(thread, start_routine, arg) pthread_create((thread), NULL, start_routine, arg)
 #define le_pthreadJoin(thread) pthread_join(thread, NULL)
 
 typedef pthread_mutex_t le_mutex;
-#define le_mutexInit(mutex) pthread_mutex_init(mutex)
+#define le_mutexInit(mutex) pthread_mutex_init(mutex, NULL)
 #define le_mutexDestroy(mutex) pthread_mutex_destroy(mutex)
 #define le_mutexLock(mutex) pthread_mutex_lock(mutex)
 #define le_mutexUnlock(mutex) pthread_mutex_unlock(mutex)
 #define le_mutexTrylock(mutex) pthread_mutex_trylock(mutex)
 
 #undef LE_BASE_REQ_MEMBERS
+#undef LE_CONNECTION_PRIVATE_FIELDS
+#undef LE_CONNECTOR_PRIVATE_FIELDS
+#undef LE_PLATFORM_WRITE_FIELDS
+#undef LE_PLATFORM_SERVER_FIELDS
+#undef LE_PLATFORM_CONNECTION_FIELDS
+#undef LE_PLATFORM_LOOP_FIELDS
 
 #ifdef __cplusplus
 }

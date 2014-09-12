@@ -15,8 +15,8 @@ typedef struct le_Queue
 	(node == (node)->prev)
 
 #define le_queueCopy(srcHead, destHead) \
-	destHead->prev = srcHead->prev;	    \
-	destHead->next = srcHead->next
+	(destHead)->prev = (srcHead)->prev;	\
+	(destHead)->next = (srcHead)->next
 
 #define le_queueNext(node) \
 	(node)->next

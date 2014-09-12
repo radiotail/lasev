@@ -166,20 +166,22 @@ static inline void le_eventLoopInit(le_EventLoop* loop) {
 		le_abort("create iocp fail!(error no: %d)", GetLastError());
 	}
 	
-	loop->data = NULL;
 	loop->server = NULL;
 	loop->eventsCount = 0;
 	loop->errorCode = 0;
+	loop->posting = 0;
 	loop->acceptex = NULL;
 	loop->connectex = NULL;
+	loop->channelReq.type = LE_POST;
 	loop->maxOverlappeds = LE_OVERLAPEDS_COUNT;
-	loop->overlappeds = (LPOVERLAPPED_ENTRY)le_malloc(loop->maxOverlappeds * sizeof(OVERLAPPED_ENTRY));
+	loop->overlappeds = (LPOVERLAPPED_ENTRY)le_malloc((pGetQueuedCompletionStatusEx? loop->maxOverlappeds: 1) * sizeof(OVERLAPPED_ENTRY));
 	
 	le_updateNowTime(loop);
 	loop->timerHeap = le_timerHeapNew(32);
 	
-	le_queueInit(&loop->connectionsHead);
 	le_queueInit(&loop->channelHead);
+	le_queueInit(&loop->connectionsHead);
+	le_safeQueueInit(&loop->pendingChannels);
 }
 
 void le_tcpServerInit(le_EventLoop* loop, le_TcpServer* server, le_connectionCB connectionCB, le_serverCloseCB closeCB) {
@@ -628,33 +630,42 @@ static inline void le_channelOver(le_Channel* channel) {
 }
 
 int le_channelInit(le_EventLoop* loop, le_Channel* channel, le_channelCB channelCB, le_channelCloseCB closeCB) {
-	le_ChannelReq* req;
-
 	assert(channelCB);
 
 	channel->loop = loop;
 	channel->masks = 0;
-	channel->using = 0;
+	channel->pending = 0;
 	channel->channelCB = channelCB;
 	channel->closeCB = closeCB;
 	le_queueInit(&channel->channelNode);
-
-	req = &channel->req;
-	req->type = LE_POST;
-	req->channel = channel;
+	le_queueInit(&channel->pendingNode);
 
 	le_addChannel(loop, channel);
 
 	return LE_OK;
 }
 
-static inline void le_processChannelReq(le_Channel* channel, le_ChannelReq* req) {
-	channel->using = 0;
+static inline void le_processChannelReq(le_EventLoop* loop, le_ChannelReq* req) {
+	le_Queue* channelNode;
+	le_Queue activityChannels;
+	le_Channel* activityChannel;
 	
-	if( channel->masks & LE_CLOSING ) {
-		le_channelOver(channel);
-	} else {
-		channel->channelCB(channel, LE_OK); // may be channel have closed
+	loop->posting = 0;
+
+	le_safeQueueSwap(&loop->pendingChannels, &activityChannels);
+
+	channelNode = le_queueNext(&activityChannels);
+	while( channelNode != &activityChannels ) {
+		activityChannel = LE_CONTAINING_RECORD(channelNode, le_Channel, pendingNode);
+		channelNode = le_queueNext(channelNode); //avoid channelNode invalid when channel closed
+
+		activityChannel->pending = 0;
+
+		if( activityChannel->masks & LE_CLOSING ) {
+			le_channelOver(activityChannel);
+		} else {
+			activityChannel->channelCB(activityChannel, LE_OK); // may be channel have closed
+		}
 	}
 }
 
@@ -663,8 +674,24 @@ int le_channelPost(le_Channel* channel) {
 		return LE_ERROR;
 	}
 
-	if( InterlockedExchange(&channel->using, 1) == 0 ) {
-		if( !PostQueuedCompletionStatus(channel->loop->iocp, 0, 0, &channel->req.overlapped) ) {
+	if( LE_ACCESS_ONCE(long, channel->pending) == 1 ) { // do simply check and stop compiler from optimizing
+		return LE_OK;
+	}
+
+	if( InterlockedExchange(&channel->pending, 1) == 0 ) {
+		le_EventLoop* loop = channel->loop;
+		
+		le_safeQueueAdd(&loop->pendingChannels, &channel->pendingNode);
+		
+		if( LE_ACCESS_ONCE(long, loop->posting) == 1 ) { // do simply check and stop compiler from optimizing
+			return LE_OK;
+		}
+		
+		if( InterlockedExchange(&loop->posting, 1) == 1 ) {
+			return LE_OK;
+		}
+		
+		if( !PostQueuedCompletionStatus(loop->iocp, 0, 0, &loop->channelReq.overlapped) ) { // wake up loop
 			le_abort("PostQueuedCompletionStatus fail!(error no: %d)\n", GetLastError());
 		}
 	}
@@ -673,13 +700,17 @@ int le_channelPost(le_Channel* channel) {
 }
 
 void le_channelClose(le_Channel* channel) {
+	if( channel->masks & LE_CLOSING ) {
+		return;
+	}
+
 	if( !(channel->masks & LE_CHANNEL_WORKING) ) {
 		return;
 	}
 
 	channel->masks |= LE_CLOSING;
 
-	if( !channel->using ) {
+	if( !channel->pending ) {
 		le_channelOver(channel);
 	}
 }
@@ -694,7 +725,7 @@ static inline void le_processReqs(le_EventLoop* loop, le_BaseReq* req) {
 	} else if( req->type == LE_CONNECT ) {
 		le_processConnectReq(((le_ConnectReq*)req)->connection, (le_ConnectReq*)req);
 	} else if( req->type == LE_POST ) {
-		le_processChannelReq(((le_ChannelReq*)req)->channel, (le_ChannelReq*)req);
+		le_processChannelReq(loop, (le_ChannelReq*)req);
 	} else {
 		assert(0);
 	}
@@ -703,35 +734,33 @@ static inline void le_processReqs(le_EventLoop* loop, le_BaseReq* req) {
 static void le_poll(le_EventLoop* loop, le_time_t timeout) {
 	BOOL result;
 	ULONG count;
-	le_BaseReq* req;
 	LPOVERLAPPED_ENTRY entrys = loop->overlappeds;
 
 	result = GetQueuedCompletionStatus(loop->iocp,
-									   &entrys[0].dwNumberOfBytesTransferred,
-									   &entrys[0].lpCompletionKey,
-									   &entrys[0].lpOverlapped,
+									   &entrys->dwNumberOfBytesTransferred,
+									   &entrys->lpCompletionKey,
+									   &entrys->lpOverlapped,
 									   (DWORD)timeout);
 
-	if( entrys[0].lpOverlapped ) {
-		req = (le_BaseReq*)entrys[0].lpOverlapped;
-		le_processReqs(loop, req);
+	if( entrys->lpOverlapped ) {
+		le_processReqs(loop, (le_BaseReq*)entrys->lpOverlapped);
 
 		for(count = 1; count < loop->maxOverlappeds; ++count) {
 			GetQueuedCompletionStatus(loop->iocp,
-									  &entrys[count].dwNumberOfBytesTransferred,
-									  &entrys[count].lpCompletionKey,
-									  &entrys[count].lpOverlapped,
+									  &entrys->dwNumberOfBytesTransferred,
+									  &entrys->lpCompletionKey,
+									  &entrys->lpOverlapped,
 									  0);
 
-			if( entrys[count].lpOverlapped == NULL ) break;
+			if( !entrys->lpOverlapped ) {
+				break;
+			}
 
-			req = (le_BaseReq*)entrys[count].lpOverlapped;
-			le_processReqs(loop, req);
+			le_processReqs(loop, (le_BaseReq*)entrys->lpOverlapped);
 		}
 
 		if( (count == loop->maxOverlappeds) && (loop->maxOverlappeds < LE_EVENTS_LIMIT) ) {
-			loop->maxOverlappeds = loop->maxOverlappeds << 1;
-			loop->overlappeds = (LPOVERLAPPED_ENTRY)le_realloc(loop->overlappeds, loop->maxOverlappeds * sizeof(OVERLAPPED_ENTRY));
+			loop->maxOverlappeds <<= 1;
 		}
 	}
 }
@@ -740,9 +769,8 @@ static void le_pollEx(le_EventLoop* loop, le_time_t timeout) {
 	BOOL result;
 	unsigned i;
 	ULONG count;
-	le_BaseReq* req;
 	LPOVERLAPPED_ENTRY entrys = loop->overlappeds;
-
+	
 	result = pGetQueuedCompletionStatusEx(loop->iocp,
 										  entrys,
 										  loop->maxOverlappeds,
@@ -752,12 +780,11 @@ static void le_pollEx(le_EventLoop* loop, le_time_t timeout) {
 
 	if( result ) {
 		for(i = 0; i < count; ++i) {
-			req = (le_BaseReq*)entrys[i].lpOverlapped;
-			le_processReqs(loop, req);
+			le_processReqs(loop, (le_BaseReq*)entrys[i].lpOverlapped);
 		}
 
 		if( (count == loop->maxOverlappeds) && (loop->maxOverlappeds < LE_EVENTS_LIMIT) ) {
-			loop->maxOverlappeds = loop->maxOverlappeds << 1;
+			loop->maxOverlappeds <<= 1;
 			loop->overlappeds = (LPOVERLAPPED_ENTRY)le_realloc(loop->overlappeds, loop->maxOverlappeds * sizeof(OVERLAPPED_ENTRY));
 		}
 	}
@@ -972,6 +999,7 @@ le_EventLoop* le_eventLoopCreate() {
 void le_eventLoopDelete(le_EventLoop* loop) {
 	CloseHandle(loop->iocp);
 	le_timerHeapFree(loop->timerHeap);
+	le_safeQueueDestroy(&loop->pendingChannels);
 	le_free(loop->overlappeds);
 	le_free(loop);
 }

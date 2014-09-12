@@ -21,6 +21,8 @@ static inline void le_abort(const char* fmt, ...) {
 	abort();
 }
 
+#define LE_ACCESS_ONCE(type, x) (*(volatile type *)&(x)) // stop compiler from optimizing
+
 static inline void le_setErrorCode(le_EventLoop* loop, int errorCode) {
 	loop->errorCode = errorCode;
 }
@@ -29,8 +31,6 @@ static inline void le_setErrorCode(le_EventLoop* loop, int errorCode) {
 
 #define LE_INCREASE_EVENTS(loop) (loop)->eventsCount++
 #define LE_DECREASE_EVENTS(loop) (loop)->eventsCount--
-
-#define LE_EVENTS_LIMIT 4096
 
 #define LE_LISTENING			0x00000001
 #define LE_CONNECTION			0x00000002

@@ -6,7 +6,6 @@
 #include <process.h>
 
 #define LE_OVERLAPEDS_COUNT 128
-#define LE_OVERLAPEDS_LIMIT 4096
 #define LE_QUEUED_ACCEPTS_COUNT 32
 
 typedef enum{
@@ -43,8 +42,8 @@ typedef struct le_ReadReq
 typedef struct le_ChannelReq
 {
 	LE_BASE_REQ_MEMBERS
-	struct le_Channel* channel;
 	void* data;
+	struct le_Channel* channel;
 } le_ChannelReq;
 
 #define LE_PLATFORM_WRITE_FIELDS
@@ -53,6 +52,7 @@ typedef struct le_ChannelReq
 	HANDLE iocp;				   \
 	OVERLAPPED_ENTRY* overlappeds; \
 	unsigned maxOverlappeds;	   \
+	le_ChannelReq channelReq;	   \
 	LPFN_ACCEPTEX acceptex;		   \
 	LPFN_CONNECTEX connectex;
 
@@ -77,10 +77,6 @@ typedef struct le_ChannelReq
 		le_ConnectReq connectReq;	\
 		le_connectCB connectCB;		\
 	};
-
-#define LE_PLATFORM_CHANNEL_FIELDS \
-	le_ChannelReq req;			   \
-	volatile long using;
 
 struct le_TcpConnection;
 

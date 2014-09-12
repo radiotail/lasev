@@ -2,15 +2,22 @@
 #include "lasev.h"
 #include <malloc.h>
 #include <signal.h>
-//#include <vld.h>
+#include "le_safeQueue.h"
+#include <vld.h>
 
-#define SEND_CHANNEL_COUNT 10
+typedef struct Test 
+{
+	le_Queue node;
+	int a;
+} Test;
+
 #define TEXT_LEN 64
 static char text[TEXT_LEN] = {0};
 static le_TcpServer* server;
 static le_EventLoop* loop;
 static le_Channel* quitChannel;
-static le_Channel sendChannels[SEND_CHANNEL_COUNT];
+static le_Channel sendChannel;
+static le_safeQueueHead shead;
 
 static void errorLog(le_EventLoop* loop, const char* title) {
 	int err = le_getErrorCode(loop);
@@ -65,13 +72,25 @@ void readCB(le_TcpConnection* client, int bytes, char* buf) {
 	sendMsg(client, buf, bytes);
 }
 
-void sendChannelClose(le_Channel* channel) {
-	printf("sendChannelClose: %p\n", channel);
-}
-
 void sendChannelCB(le_Channel* channel, int status) {
-	printf("sendChannelCB: %p\n", channel);
-	le_channelClose(channel);
+	le_Queue head;
+	le_Queue* node;
+	Test* p;
+
+	printf("into sendChannelCB!\n");
+
+	le_safeQueueSwap(&shead, &head);
+
+	node = le_queueNext(&head);
+	while( node != &head ) {
+		p = (Test*)node;
+		node = le_queueNext(node);
+
+		printf("sendChannelCB: %d, node: %p, head: %p, prev: %p, next: %p\n", p->a, node, &head, node->prev, node->next);
+		free(p);
+	}
+
+	printf("outo sendChannelCB!\n");
 }
 
 void connectionCB(le_TcpServer* server, int status) {
@@ -108,6 +127,7 @@ void channelClose(le_Channel* channel) {
 }
 
 void channelCB(le_Channel* channel, int status) {
+	le_channelClose(&sendChannel);
 	le_channelClose(channel);
 	le_serverClose(server);
 }
@@ -137,20 +157,26 @@ void unhookSignals() {
 static void* worker(void* arg) {
 	int i;
 	
-	for(i = 0; i < SEND_CHANNEL_COUNT; i += 2) {
-		printf("worker loop!\n");
-		printf("post channel: %d, %p\n", i, &sendChannels[i]);
-		le_channelPost(&sendChannels[i]);
-		printf("post channel: %d, %p\n", i + 1, &sendChannels[i + 1]);
-		le_channelPost(&sendChannels[i + 1]);
-		le_sleep(3000);
+	for(i = 0; i < 10; i++) {
+		Test* t = malloc(sizeof(Test));
+		t->a = i;
+		le_safeQueueAdd(&shead, &t->node);
+		printf("worker: %d, node: %p, head: %p, prev: %p, next: %p\n", t->a, &t->node, &shead.queue, (&t->node)->prev, (&t->node)->next);
+		le_channelPost(&sendChannel);
 	}
 
+	for(i = 10; i < 20; i++) {
+		Test* t = malloc(sizeof(Test));
+		t->a = i;
+		le_safeQueueAdd(&shead, &t->node);
+		printf("worker: %d, node: %p, head: %p, prev: %p, next: %p\n", t->a, &t->node, &shead.queue, (&t->node)->prev, (&t->node)->next);
+		le_channelPost(&sendChannel);
+	}
+	
 	return NULL;
 }
 
 int main() {
-	int i;
 	pthread_t thread;
 	int result;
 
@@ -164,6 +190,7 @@ int main() {
 
 	le_tcpServerInit(loop, server, connectionCB, serverClose);
 	le_channelInit(loop, quitChannel, channelCB, channelClose);
+	le_channelInit(loop, &sendChannel, sendChannelCB, NULL);
 
 	result = le_bind(server, "0.0.0.0", 8611);
 	if( result ) {
@@ -179,9 +206,7 @@ int main() {
 		printf("le_listen success!\n");
 	}
 
-	for(i = 0; i < SEND_CHANNEL_COUNT; ++i) {
-		le_channelInit(loop, &sendChannels[i], sendChannelCB, sendChannelClose);
-	}
+	le_safeQueueInit(&shead);
 
 	le_pthreadCreate(&thread, worker, NULL);
 
@@ -190,6 +215,8 @@ int main() {
 	le_eventLoopDelete(loop);
 
 	le_pthreadJoin(thread);
+
+	le_safeQueueDestroy(&shead);
 
 	printf("<--------lasev closed!-------->\n");
 	unhookSignals();

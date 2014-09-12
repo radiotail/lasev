@@ -46,7 +46,7 @@ static inline void le_timerHeapPrint(le_TimerHeap* timerHeap) {
 	unsigned i;
 	printf("\n<---------------------PRINT TIMER HEAP--------------------->\n");
 	for(i = 1; i <= timerHeap->size; ++i) {
-		printf("[%d]%lld ", i, timerHeap->data[i]->timeout);
+		printf("[%d]%lu ", i, timerHeap->data[i]->timeout);
 	}
 	printf("\n<---------------------PRINT OK--------------------->\n");
 }

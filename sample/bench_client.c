@@ -9,7 +9,7 @@
 static char buff[BUF_SIZE] = {0};
 static char* msgText = NULL;
 static int msgLen = 0;
-static int timeLimit = 10000; //ms
+static le_time_t timeLimit = 10000; //ms
 static le_time_t startTime = 0;
 static long long readMsgTimes = 0;
 static long long readMsgtBytes = 0;

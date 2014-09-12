@@ -118,7 +118,13 @@ static inline void le_initWriteReq(le_TcpConnection* connection, le_WriteReq* re
 	req->connection = connection;
 }
 
-static void le_serverProcessCB(le_TcpBasicEvent* event, unsigned events);
+static inline void le_initBasicEvent(le_TcpBasicEvent* basicEvent,le_processCB processCB) {
+	basicEvent->fd = -1;
+	basicEvent->mask = 0;
+	basicEvent->processCB = processCB;
+}
+
+static inline void le_serverProcessCB(le_TcpBasicEvent* event, unsigned events);
 void le_tcpServerInit(le_EventLoop* loop, le_TcpServer* server, le_connectionCB connectionCB, le_serverCloseCB closeCB) {
 	assert(connectionCB);
 	assert(!loop->server);
@@ -129,9 +135,8 @@ void le_tcpServerInit(le_EventLoop* loop, le_TcpServer* server, le_connectionCB 
 	server->pendingAcceptFd = -1;
 	server->connectionCB = connectionCB;
 	server->closeCB = closeCB;
-	server->basicEvent.fd = -1;
-	server->basicEvent.mask = 0;
-	server->basicEvent.processCB = le_serverProcessCB;
+
+	le_initBasicEvent(&server->basicEvent, le_serverProcessCB);
 }
 
 static inline void le_connectionProcessCB(le_TcpBasicEvent* event, unsigned events);
@@ -141,33 +146,34 @@ void le_tcpConnectionInit(le_EventLoop* loop, le_TcpConnection* connection, le_c
 	connection->pendingWriteReqs = 0;
 	connection->writeTotalSize = 0;
 	connection->closeCB = closeCB;
-	connection->basicEvent.fd = -1;
-	connection->basicEvent.mask = 0;
-	connection->basicEvent.processCB = le_connectionProcessCB;
+
+	le_initBasicEvent(&connection->basicEvent, le_connectionProcessCB);
 
 	le_queueInit(&connection->writeReqHead);
 }
 
+static inline void le_channelProcessCB(le_TcpBasicEvent* basicEvent, unsigned events);
 static inline void le_eventLoopInit(le_EventLoop* loop) {
 	loop->epollFd = epoll_create1(EPOLL_CLOEXEC);
 	if( loop->epollFd == - 1 ) {
 		le_abort("create epoll fail!(error no: %d)", errno);
 	}
 
-	loop->data = NULL;
 	loop->server = NULL;
 	loop->eventsCount = 0;
 	loop->errorCode = 0;
-	loop->maxEventCount = MAX_EVENTS;
-	loop->channelEvent.fd = -1;
-	loop->channelEvent.mask = 0;
-	loop->events = (struct epoll_event*)le_malloc(sizeof(struct epoll_event) * MAX_EVENTS);
+	loop->posting = 0;
+	loop->maxEventCount = LE_DEFAULT_EVENTS;
+	loop->events = (struct epoll_event*)le_malloc(sizeof(struct epoll_event) * loop->maxEventCount);
+
+	le_initBasicEvent(&loop->channelEvent, le_channelProcessCB);
 
 	le_updateNowTime(loop);
 	loop->timerHeap = le_timerHeapNew(32);
 
-	le_queueInit(&loop->connectionsHead);
 	le_queueInit(&loop->channelHead);
+	le_queueInit(&loop->connectionsHead);
+	le_safeQueueInit(&loop->pendingChannels);
 }
 
 static inline int le_addEvent(le_EventLoop* loop, le_TcpBasicEvent* event, unsigned events) {
@@ -209,7 +215,7 @@ static inline size_t le_bufsSize(const le_Buffer bufs[], unsigned bufCount) {
 	unsigned i;
 	size_t size = 0;
 
-	for( i = 0; i < bufCount; i++ ) {
+	for(i = 0; i < bufCount; ++i) {
 		size += bufs[i].len;
 	}
 
@@ -228,12 +234,13 @@ static inline int le_checkSocketError(int fd) {
 }
 
 static inline void le_connectorProcessCB(le_TcpBasicEvent* basicEvent, unsigned events) {
-    le_TcpConnection* connection = LE_CONTAINING_RECORD(basicEvent, le_TcpConnection, basicEvent);
+	int error;
+    le_TcpConnection* connection = (le_TcpConnection*)basicEvent;
 
 	LE_DECREASE_EVENTS(connection->loop);
 	le_delEvent(connection->loop, basicEvent, EPOLLOUT);
 
-	int error = le_checkSocketError(basicEvent->fd);
+	error = le_checkSocketError(basicEvent->fd);
   	if( error == 0 ) {
 		basicEvent->processCB = le_connectionProcessCB;
 		le_addConnection(connection->loop, connection);
@@ -252,8 +259,8 @@ static inline void le_connectorProcessCB(le_TcpBasicEvent* basicEvent, unsigned 
 
 int le_connect(le_TcpConnection* connection, const char* ip, int port, le_connectCB cb) {
 	int result;
-	le_TcpBasicEvent* basicEvent;
 	struct sockaddr_in addr;
+	le_TcpBasicEvent* basicEvent;
 
 	assert(cb);
 
@@ -278,23 +285,25 @@ int le_connect(le_TcpConnection* connection, const char* ip, int port, le_connec
 		le_setErrorCode(connection->loop, errno);
 		return LE_ERROR;
 	}
-	
-	do {
+
+	while( 1 ) {
 		result = connect(basicEvent->fd, (struct sockaddr *)&addr, sizeof(addr));
-	} while ( result == -1 && errno == EINTR );
-
-	if( result == -1 ) {
-		if( errno != EINPROGRESS ) {
-			le_setErrorCode(connection->loop, errno);
-			return LE_ERROR;
+		if( result == -1 ) {
+			if( errno == EINTR ) {
+				continue;
+			} else if( errno != EINPROGRESS ) {
+				le_setErrorCode(connection->loop, errno);
+				return LE_ERROR;
+			}
 		}
+		break;
 	}
-
-	le_addEvent(connection->loop, basicEvent, EPOLLOUT);
-	LE_INCREASE_EVENTS(connection->loop);
+	
 	basicEvent->processCB = le_connectorProcessCB;
 	connection->connectCB = cb;
-
+	le_addEvent(connection->loop, basicEvent, EPOLLOUT);
+	LE_INCREASE_EVENTS(connection->loop);
+	
 	return LE_OK;
 }
 
@@ -370,13 +379,11 @@ static void le_processWriting(le_TcpConnection* connection) {
 
 	bufCount = req->bufCount - req->bufIndex;
 
-	do {
-		if( bufCount == 1 ) {
-			n = write(connection->basicEvent.fd, req->bufs[0].base, req->bufs[0].len );
-		} else {
-			n = writev(connection->basicEvent.fd, (struct iovec*)req->bufs, bufCount);
-		}
-	} while ( n == -1 && errno == EINTR );
+	if( bufCount == 1 ) {
+		n = write(connection->basicEvent.fd, req->bufs[0].base, req->bufs[0].len );
+	} else {
+		n = writev(connection->basicEvent.fd, (struct iovec*)req->bufs, bufCount);
+	}
 
 	if( n >= 0 ) {
 		size_t len;
@@ -491,17 +498,15 @@ int le_stopRead(le_TcpConnection* connection) {
 }
 
 static void le_processReading(le_TcpConnection* connection) {
-	le_Buffer buf;
 	ssize_t bytes;
+	le_Buffer buf;
 
 	assert(connection->masks & LE_READING);
 	connection->masks |= LE_QUEUE_READ;
 
 	connection->allocCB(connection, &buf);
 	
-	do {
-		bytes = read(connection->basicEvent.fd, buf.base, buf.len);
-	} while ( bytes < 0 && errno == EINTR );
+	bytes = read(connection->basicEvent.fd, buf.base, buf.len);
 	
 	if( bytes > 0 ) {
 		connection->readCB(connection, bytes, buf.base);
@@ -611,20 +616,22 @@ int le_connectionClose(le_TcpConnection* connection) {
 }
 
 static inline void le_connectionProcessCB(le_TcpBasicEvent* basicEvent, unsigned events) {
-	le_TcpConnection* connection = LE_CONTAINING_RECORD(basicEvent, le_TcpConnection, basicEvent);
+	le_TcpConnection* connection = (le_TcpConnection*)basicEvent;
 
 	if( events & EPOLLIN ) {
 		le_processReading(connection);
 	} else if( events & EPOLLOUT ) {
 		le_processWriting(connection);
+	} else {
+		assert(0);
 	}
 }
 
-static void le_serverProcessCB(le_TcpBasicEvent* basicEvent, unsigned events) {
+static inline void le_serverProcessCB(le_TcpBasicEvent* basicEvent, unsigned events) {
 	int afd;
 	struct sockaddr_in addr;
 	socklen_t len = sizeof(struct sockaddr_in);
-	le_TcpServer* server = LE_CONTAINING_RECORD(basicEvent, le_TcpServer, basicEvent);
+	le_TcpServer* server = (le_TcpServer*)basicEvent;
 
 	while( 1 ) {
         afd = accept(basicEvent->fd, (struct sockaddr*)&addr, &len);
@@ -675,29 +682,32 @@ static inline void le_channelProcessCB(le_TcpBasicEvent* basicEvent, unsigned ev
 	ssize_t bytes;
 	uint64_t value = 0;
 	le_EventLoop* loop;
-	le_Channel* channel;
-	le_Queue* channelHead;
 	le_Queue* channelNode;
-	
-	do {
-		bytes = read(basicEvent->fd, &value, sizeof(value));
-	} while ( bytes < 0 && errno == EINTR );
+	le_Queue activityChannels;
+	le_Channel* activityChannel;
+
+	bytes = read(basicEvent->fd, &value, sizeof(value));
 	
 	if( bytes != sizeof(value) ) {
 		le_abort("le_channelProcessCB fail!(error no: %u, %s)\n", errno, le_strerror(errno));
 	}
 	
 	loop = LE_CONTAINING_RECORD(basicEvent, le_EventLoop, channelEvent);
-	channelHead = &loop->channelHead;
-	channelNode = le_queueNext(channelHead);
+	loop->posting = 0;
 
-	while( channelNode != channelHead ) {
-		channel = LE_CONTAINING_RECORD(channelNode, le_Channel, channelNode);
+	le_safeQueueSwap(&loop->pendingChannels, &activityChannels);
+
+	channelNode = le_queueNext(&activityChannels);
+	while( channelNode != &activityChannels ) {
+		activityChannel = LE_CONTAINING_RECORD(channelNode, le_Channel, pendingNode);
 		channelNode = le_queueNext(channelNode); //avoid channelNode invalid when channel closed
 
-		if( channel->using == 1 ) {
-			channel->using = 0;
-			channel->channelCB(channel, 0);
+		activityChannel->pending = 0;
+
+		if( activityChannel->masks & LE_CLOSING ) {
+			le_channelOver(activityChannel);
+		} else {
+			activityChannel->channelCB(activityChannel, LE_OK); // may be channel have closed
 		}
 	}
 }
@@ -716,7 +726,6 @@ static inline int le_channelEventInit(le_EventLoop* loop) {
 	}
 
 	channelEvent->fd = eventFd;
-	channelEvent->processCB = le_channelProcessCB;
 
 	le_addEvent(loop, channelEvent, EPOLLIN);
 
@@ -733,27 +742,43 @@ int le_channelInit(le_EventLoop* loop, le_Channel* channel, le_channelCB channel
 
 	channel->loop = loop;
 	channel->masks = 0;
-	channel->using = 0;
+	channel->pending = 0;
 	channel->channelCB = channelCB;
 	channel->closeCB = closeCB;
-
 	le_queueInit(&channel->channelNode);
+	le_queueInit(&channel->pendingNode);
+
 	le_addChannel(loop, channel);
 
 	return LE_OK;
 }
 
 int le_channelPost(le_Channel* channel) {
-	if( __sync_val_compare_and_swap(&channel->using, 0, 1) == 0 ) {
-		int bytes;
-		ssize_t len = sizeof(le_channelBytes);
-		le_EventLoop* loop = channel->loop;
+	if( channel->masks & LE_CLOSING ) {
+		return LE_ERROR;
+	}
 
-		do{
-			bytes = write(loop->channelEvent.fd, (void*)&le_channelBytes, len);
-		} while( bytes == -1 && errno == EINTR );
+	if( LE_ACCESS_ONCE(long, channel->pending) == 1 ) { // do simply check and stop compiler from optimizing
+		return LE_OK;
+	}
+
+	if( __sync_val_compare_and_swap(&channel->pending, 0, 1) == 0 ) {
+		int bytes;
+		le_EventLoop* loop = channel->loop;
+		
+		le_safeQueueAdd(&loop->pendingChannels, &channel->pendingNode);
+
+		if( LE_ACCESS_ONCE(long, loop->posting) == 1 ) { // do simply check and stop compiler from optimizing
+			return LE_OK;
+		}
+
+		if( __sync_val_compare_and_swap(&loop->posting, 0, 1) == 1 ) {
+			return LE_OK;
+		}
+
+		bytes = write(loop->channelEvent.fd, (void*)&le_channelBytes, sizeof(le_channelBytes)); // wake up loop
         
-		if( bytes == len ) {
+		if( bytes == sizeof(le_channelBytes) ) {
 			return LE_OK;
 		} else if( bytes == -1 ) {
 			if( errno == EAGAIN || errno == EWOULDBLOCK ) {
@@ -778,7 +803,7 @@ void le_channelClose(le_Channel* channel) {
 
 	channel->masks |= LE_CLOSING;
 
-	if( !channel->using ) {
+	if( !channel->pending ) {
 		le_channelOver(channel);
 	}
 }
@@ -849,7 +874,8 @@ static inline void le_poll(le_EventLoop* loop, le_time_t timeout) {
 	le_TcpBasicEvent* basicEvent;
 	struct epoll_event* events = loop->events;
 
-    n = epoll_wait(loop->epollFd, events, MAX_EVENTS, timeout);
+	n = epoll_wait(loop->epollFd, events, loop->maxEventCount, timeout);
+
     if( n == -1 ) {
 		if( errno == EINTR ) {
 			return;
@@ -864,7 +890,7 @@ static inline void le_poll(le_EventLoop* loop, le_time_t timeout) {
     }
 
     if( (n == loop->maxEventCount) && (loop->maxEventCount < LE_EVENTS_LIMIT) ) {
-        loop->maxEventCount = loop->maxEventCount << 1;
+        loop->maxEventCount <<= 1;
         loop->events = (struct epoll_event*)le_realloc(loop->events, sizeof(struct epoll_event) * loop->maxEventCount);
     }
 }
@@ -912,7 +938,10 @@ le_EventLoop* le_eventLoopCreate() {
 
 void le_eventLoopDelete(le_EventLoop* loop) {
 	le_timerHeapFree(loop->timerHeap);
-	close(loop->channelEvent.fd);
+	le_safeQueueDestroy(&loop->pendingChannels);
+	if( loop->channelEvent.fd != -1 ) {
+		close(loop->channelEvent.fd);
+	}
 	close(loop->epollFd);
 	le_free(loop->events);
 	le_free(loop);

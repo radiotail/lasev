@@ -15,7 +15,7 @@
 #include <limits.h>
 #include <string.h>
 
-#define MAX_EVENTS 1024
+#define LE_DEFAULT_EVENTS 1024
 
 struct le_TcpBasicEvent;
 typedef void (*le_processCB)(struct le_TcpBasicEvent* event, unsigned int events);
@@ -26,6 +26,7 @@ typedef struct le_Buffer
 	size_t len;
 } le_Buffer;
 
+// le_TcpBasicEvent is a base class of le_TcpServer and le_TcpConnection
 typedef struct le_TcpBasicEvent
 {
 	int fd;
@@ -33,11 +34,11 @@ typedef struct le_TcpBasicEvent
 	le_processCB processCB;
 } le_TcpBasicEvent;
 
-#define LE_BASE_REQ_MEMBERS  \
+#define LE_BASE_REQ_MEMBERS
 
 #define LE_PLATFORM_LOOP_FIELDS    \
 	int epollFd;				   \
-	int maxEventCount;			   \
+	unsigned maxEventCount;		   \
 	le_TcpBasicEvent channelEvent; \
 	struct epoll_event* events;
 
@@ -50,13 +51,13 @@ typedef struct le_TcpBasicEvent
 	le_Buffer bufsml[4];
 
 #define LE_PLATFORM_SERVER_FIELDS  \
-	int pendingAcceptFd; 		   \
-	le_TcpBasicEvent basicEvent;
+	le_TcpBasicEvent basicEvent;   \
+	int pendingAcceptFd;
 
 #define LE_PLATFORM_CONNECTION_FIELDS   \
+	le_TcpBasicEvent basicEvent;		\
 	size_t writeTotalSize;				\
-	le_Queue writeReqHead;				\
-	le_TcpBasicEvent basicEvent;
+	le_Queue writeReqHead;
 
 #define LE_CONNECTION_PRIVATE_FIELDS \
 	struct {						 \
@@ -69,10 +70,6 @@ typedef struct le_TcpBasicEvent
 		le_ConnectReq connectReq;	\
 		le_connectCB connectCB;		\
 	};
-
-#define LE_PLATFORM_CHANNEL_FIELDS \
-	le_TcpBasicEvent basicEvent;   \
-	volatile int using;
 
 struct le_EventLoop;
 
