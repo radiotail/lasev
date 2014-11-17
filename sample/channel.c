@@ -56,7 +56,7 @@ static void sendMsg(le_TcpConnection* client, const char* text, int bytes) {
 }
 
 void readCB(le_TcpConnection* client, int bytes, char* buf) {
-	if( bytes < 0 ) {
+	if( bytes <= 0 ) {
 		le_connectionClose(client);
 		return;
 	}
