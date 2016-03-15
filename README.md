@@ -1,13 +1,15 @@
 ## lasev - a lite asynchronous event lib
 
 ## OVERVIEW
-	lasev is a lite asynchronous network library. It's idea derived form libuv, but much more cleanly, because lasev's function is very concise. lasev's API is very like libuv, so if you familiar libuv, you should easy to get started. 
+	lasev is a lite asynchronous network library. It's idea derived form libuv, 
+but much more cleanly, because lasev's function is very concise. lasev's API is 
+very like libuv, so if you familiar libuv, you should easy to get started. 
 
 ## FEATURE
 	asynchronous tcp sockets
 	support iocp, epoll
 	timer event
-	thread queue
+	thread-safe queue
 
 ## BUILDS
 Use premake4 to generate project files.
@@ -23,6 +25,6 @@ $ premake4 --file=test_lasev.lua gmake
 
 [Premake Quick Start](http://industriousone.com/premake-quick-start).
 
-## SUPPORTED PLATFORMS
+## PLATFORMS
 Windows, Linux.
 
