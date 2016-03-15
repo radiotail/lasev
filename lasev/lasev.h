@@ -1,3 +1,10 @@
+//////////////////////////////////////////////////////////////////////////////////////
+// lasev - a lite asynchronous event lib
+//
+// Mail: radiotail86@gmail.com
+// About the details of license, please read LICENSE
+//////////////////////////////////////////////////////////////////////////////////////
+
 #ifndef LE_LASEV_H_
 #define LE_LASEV_H_
 
@@ -32,30 +39,30 @@ struct le_TcpConnection;
 ////////////////////////////////////////////////////////////////////////////////////////
 // callback function.
 
-//read callback. bytes > 0, can read data from buf. bytes == 0, peer closed.
-//bytes < 0, have error.
+// read callback. bytes > 0, can read data from buf. bytes == 0, peer closed.
+// bytes < 0, have an error.
 typedef void (*le_readCB)(struct le_TcpConnection* connection, int bytes, char* buf);
-//connect callback. status != 0, have an error.
+// connect callback. status != 0, have an error.
 typedef void (*le_connectCB)(struct le_TcpConnection* connection, int status);
-//connect callback. status != 0, have an error.
+// connect callback. status != 0, have an error.
 typedef void (*le_allocCB)(struct le_TcpConnection* connection, struct le_Buffer*);
-//write callback. bytes < 0, have an error.
+// write callback. bytes < 0, have an error.
 typedef void (*le_writeCB)(struct le_WriteReq* req, int bytes);
-//connection close callback.
+// connection close callback.
 typedef void (*le_connectionCloseCB)(struct le_TcpConnection* connection);
-//server close callback.
+// server close callback.
 typedef void (*le_serverCloseCB)(struct le_TcpServer* server);
-//connection callback. status != 0, have an error.
+// connection callback. status != 0, have an error.
 typedef void (*le_connectionCB)(struct le_TcpServer* server, int status);
-//timer callback.
+// timer callback.
 typedef void (*le_timerCB)(struct le_Timer* timer);
-//channel post callback. status != 0, have an error.
+// channel post callback. status != 0, have an error.
 typedef void (*le_channelCB)(struct le_Channel* channel, int status);
-//channel close callback.
+// channel close callback.
 typedef void (*le_channelCloseCB)(struct le_Channel* channel);
 
-//returns the base address of an instance of a structure given the type of the 
-//structure and the address of a field within the containing structure.
+// returns the base address of an instance of a structure given the type of the 
+// structure and the address of a field within the containing structure.
 #define LE_CONTAINING_RECORD(ptr, type, field) \
 	((type*) ((char*)(ptr) - ((char*) &((type*)0)->field)))
 
@@ -63,13 +70,13 @@ typedef void (*le_channelCloseCB)(struct le_Channel* channel);
 ////////////////////////////////////////////////////////////////////////////////////////
 // request struct.
 
-//base request struct. this is a super class of others request struct.
+// base request struct. this is a super class of others request struct.
 typedef struct le_BaseReq
 {
 	LE_BASE_REQ_MEMBERS
 } le_BaseReq;
 
-//write request struct.
+// write request struct.
 typedef struct le_WriteReq
 {
 	LE_BASE_REQ_MEMBERS
@@ -79,7 +86,7 @@ typedef struct le_WriteReq
 	le_writeCB writeCB;
 } le_WriteReq;
 
-//connect request struct.
+// connect request struct.
 typedef struct le_ConnectReq
 {
 	LE_BASE_REQ_MEMBERS
@@ -160,9 +167,19 @@ typedef struct le_EventLoop
 	le_TcpServer* server;
 } le_EventLoop;
 
-////////////////////////////////////////////////////////////////////////////////////////
-// memory function.
+// create event loop(none thread safe)
+LE_EXTERN le_EventLoop* le_eventLoopCreate();
+// delete event loop
+LE_EXTERN void le_eventLoopDelete(le_EventLoop* loop);
+// run event loop
+LE_EXTERN void le_run(le_EventLoop* loop);
 
+// return last error's number code
+LE_EXTERN int le_getErrorCode(le_EventLoop* loop);
+// return error's string description
+LE_EXTERN const char* le_strerror(int err);
+
+// 3rd libary(jemalloc, tcmalloc) can be used to replace these API
 #define le_malloc malloc
 #define le_free free
 #define le_realloc realloc
@@ -170,48 +187,62 @@ typedef struct le_EventLoop
 ////////////////////////////////////////////////////////////////////////////////////////
 // socket option function..
 
+// set tcp nodelay. enable = 1 open, 0 close
 #define le_setTcpNoDelay(tcpEvent, enable) le_setPlatformTcpNoDelay(tcpEvent, enable)
+// set tcp keepalive. enable = 1 open, 0 close
 #define le_setTcpKeepAlive(tcpEvent, enable) le_setPlatformTcpKeepAlive(tcpEvent, enable)
-#define le_setTcpSendBuffer(tcpEvent, enable) le_setPlatformTcpSendBuffer(tcpEvent, enable)
+// set tcp sendbuffer. size is buffer size
+#define le_setTcpSendBuffer(tcpEvent, size) le_setPlatformTcpSendBuffer(tcpEvent, size)
 
-void le_tcpServerInit(le_EventLoop* loop, le_TcpServer* server, le_connectionCB connectionCB, le_serverCloseCB closeCB);
-void le_tcpConnectionInit(le_EventLoop* loop, le_TcpConnection* connection, le_connectionCloseCB closeCB);
+// a new tcp server must init at first
+LE_EXTERN void le_tcpServerInit(le_EventLoop* loop, le_TcpServer* server, le_connectionCB connectionCB, le_serverCloseCB closeCB);
+// a new tcp connection must init at first
+LE_EXTERN void le_tcpConnectionInit(le_EventLoop* loop, le_TcpConnection* connection, le_connectionCloseCB closeCB);
 
-int le_listen(le_TcpServer* server, int backlog);
-int le_bind(le_TcpServer* server, const char * addr, int port);
-int le_accept(le_TcpServer* server, le_TcpConnection* connection);
-int le_connect(le_TcpConnection* connection, const char* ip, int port, le_connectCB cb);
-int le_startRead(le_TcpConnection* connection, le_readCB readCB, le_allocCB allocCB);
-int le_stopRead(le_TcpConnection* connection);
-int le_write(le_TcpConnection* connection, le_WriteReq* req, le_Buffer bufs[], int bufCount, le_writeCB cb);
-int le_connectionShutdown(le_TcpConnection* connection);
-int le_connectionClose(le_TcpConnection* connection);
-int le_serverClose(le_TcpServer* server);
+// return LE_OK on success, LE_ERROR on error
+LE_EXTERN int le_listen(le_TcpServer* server, int backlog);
+LE_EXTERN int le_bind(le_TcpServer* server, const char * addr, int port);
+LE_EXTERN int le_accept(le_TcpServer* server, le_TcpConnection* connection);
+LE_EXTERN int le_connect(le_TcpConnection* connection, const char* ip, int port, le_connectCB cb);
+// start read data from socekt
+LE_EXTERN int le_startRead(le_TcpConnection* connection, le_readCB readCB, le_allocCB allocCB);
+// stop read data from socekt, but it don't close read side of a duplex connection,
+// so can call le_startRead to restart read
+LE_EXTERN int le_stopRead(le_TcpConnection* connection);
+// write data to socekt, bufs is buffer array, bufCount is array length
+LE_EXTERN int le_write(le_TcpConnection* connection, le_WriteReq* req, le_Buffer bufs[], int bufCount, le_writeCB cb);
+// close write side of a duplex connection
+LE_EXTERN int le_connectionShutdown(le_TcpConnection* connection);
+// close connection
+LE_EXTERN int le_connectionClose(le_TcpConnection* connection);
+// close server
+LE_EXTERN int le_serverClose(le_TcpServer* server);
 
-void le_timerInit(le_EventLoop* loop, le_Timer* timer);
-int le_timerStart(le_Timer* timer, le_time_t timeout, le_time_t repeat, le_timerCB timerCB);
-int le_timerClose(le_Timer* timer);
-void le_timerSetRepeat(le_Timer* timer, le_time_t repeat);
-le_time_t le_timerGetRepeat(le_Timer* timer);
+// a new timer must init at first
+LE_EXTERN void le_timerInit(le_EventLoop* loop, le_Timer* timer);
+// start timer after timeout, then will repeat using the repeat value if it's nonzero.
+// return LE_OK on success, LE_ERROR on error
+LE_EXTERN int le_timerStart(le_Timer* timer, le_time_t timeout, le_time_t repeat, le_timerCB timerCB);
+// close timer
+LE_EXTERN int le_timerClose(le_Timer* timer);
+// set repeat value
+LE_EXTERN void le_timerSetRepeat(le_Timer* timer, le_time_t repeat);
+// return repeat value
+LE_EXTERN le_time_t le_timerGetRepeat(le_Timer* timer);
+// milliseconds
 #define le_getNowTime(loop) loop->time
 #define le_sleep(milliseconds) Sleep(milliseconds)
 
-int le_channelPost(le_Channel* channel);
-int le_channelInit(le_EventLoop* loop, le_Channel* channel, le_channelCB channelCB, le_channelCloseCB closeCB);
-void le_channelClose(le_Channel* channel);
-
-le_EventLoop* le_eventLoopCreate();
-void le_eventLoopDelete(le_EventLoop* loop);
-void le_run(le_EventLoop* loop);
-
-// error's string description
-const char* le_strerror(int err);
-// error's number code
-int le_getErrorCode(le_EventLoop* loop);
+// init channel
+LE_EXTERN int le_channelInit(le_EventLoop* loop, le_Channel* channel, le_channelCB channelCB, le_channelCloseCB closeCB);
+// wake up loop thread. it can be called from other threads
+LE_EXTERN int le_channelPost(le_Channel* channel);
+// close channel. must be called from loop thread
+LE_EXTERN void le_channelClose(le_Channel* channel);
 
 
 ////////////////////////////////////////////////////////////////////////////////////////
-// thread functions
+// threads api like POSIX threads
 
 typedef pthread_t le_pthread;
 #define le_pthreadSelf() pthread_self()

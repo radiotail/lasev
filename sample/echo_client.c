@@ -1,8 +1,13 @@
+//////////////////////////////////////////////////////////////////////////////////////
+// Mail: radiotail86@gmail.com
+// About the details of license, please read LICENSE
+//////////////////////////////////////////////////////////////////////////////////////
+
 #include <stdio.h>
 #include "lasev.h"
 #include <stdlib.h>
 #include <signal.h>
-//#include <vld.h>
+#include <vld.h>
 
 #define BUF_SIZE 1024
 
@@ -33,6 +38,7 @@ void shutdownCB(le_TcpConnection* client) {
 
 void writeCB(le_WriteReq* req, int bytes) {
 	printf("writeCB bytes: %d\n", bytes);
+	sbytes += bytes;
 	free(req);
 }
 
@@ -42,9 +48,10 @@ static void sendMsg(le_TcpConnection* client, const char* text, int bytes) {
 	le_WriteReq* req;
 
 	sendbuf.base = (char*)text;
+	memset(sendbuf.base, 0, bytes);
 	sendbuf.len = bytes;
 	req = (le_WriteReq*)malloc(sizeof(le_WriteReq));
-	req->data = (void*)text;
+	req->data = (void*)sendbuf.base;
 
 	result = le_write(client, req, &sendbuf, 1, writeCB);
 	if( result ) {
@@ -63,11 +70,11 @@ void readCB(le_TcpConnection* client, int bytes, char* buf) {
 	}
 	
 	rbytes += bytes;
-	printf("readCB text is: (%d)%s, rbytes: %d, sbytes: %d\n", bytes, buf, rbytes, sbytes);
+	printf("readCB text len: %d\n", bytes);
 
-	if( read_counter++ >= 10 ) {
+	/*if( read_counter++ >= 10 ) {
 		le_connectionClose(client);
-	}
+	}*/
 }
 
 void connectionCB(le_TcpConnection* client, int status) {
@@ -117,6 +124,7 @@ int main() {
 
 	le_eventLoopDelete(loop);
 	
+	printf("rbytes: %d, sbytes: %d\n", rbytes, sbytes);
 	printf("<---------client closed!--------->\n");
 
 	getchar();

@@ -2,11 +2,13 @@
 #include "le_internal.h"
 #include "le_timerHeap.h"
 
-#if defined(IOV_MAX)
+#ifdef IOV_MAX
 # define MAX_BUFS_COUNT IOV_MAX
 #else
 # define MAX_BUFS_COUNT 128
 #endif
+
+#define INVALID_SOCKET -1
 
 static const uint64_t le_channelBytes = 1; //must be 8 bytes
 
@@ -19,9 +21,15 @@ int le_getErrorCode(le_EventLoop* loop) {
 }
 
 static inline void le_updateNowTime(le_EventLoop* loop) {
-	struct timeval tv;
-	gettimeofday(&tv, NULL);
-	loop->time = (tv.tv_sec * 1000) + (tv.tv_usec / 1000);
+#ifdef CLOCK_REALTIME_COARSE
+# define WHICH_CLOCK CLOCK_REALTIME_COARSE
+#else
+# define WHICH_CLOCK CLOCK_MONOTONIC
+#endif
+	struct timespec ts;
+	clock_gettime(WHICH_CLOCK, &ts);
+	loop->time = (uint64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+#undef WHICH_CLOCK
 }
 
 static inline int le_setNonBlocking(le_EventLoop* loop, int fd) {
@@ -36,7 +44,7 @@ static inline int le_setNonBlocking(le_EventLoop* loop, int fd) {
 }
 
 int le__setTcpNoDelay(le_EventLoop* loop, int fd, int enable) {
-	if( fd == -1 ) {
+	if( fd == INVALID_SOCKET ) {
 		le_setErrorCode(loop, EINVAL);
 		return LE_ERROR;
 	}
@@ -50,7 +58,7 @@ int le__setTcpNoDelay(le_EventLoop* loop, int fd, int enable) {
 }
 
 int le__setTcpKeepAlive(le_EventLoop* loop, int fd, int enable) {
-	if( fd == -1 ) {
+	if( fd == INVALID_SOCKET ) {
 		le_setErrorCode(loop, EINVAL);
 		return LE_ERROR;
 	}
@@ -64,7 +72,7 @@ int le__setTcpKeepAlive(le_EventLoop* loop, int fd, int enable) {
 }
 
 int le__setTcpSendBuffer(le_EventLoop* loop, int fd, int size) {
-	if( fd == -1 ) {
+	if( fd == INVALID_SOCKET ) {
 		le_setErrorCode(loop, EINVAL);
 		return LE_ERROR;
 	}
@@ -83,10 +91,10 @@ static inline void le_connectionOver(le_TcpConnection* connection) {
 		le_queueRemove(&connection->connectionNode);
 		LE_DECREASE_EVENTS(connection->loop);
 	}
-	
-	if( connection->basicEvent.fd != -1 ) {
+
+	if( connection->basicEvent.fd != INVALID_SOCKET ) {
 		close(connection->basicEvent.fd);
-		connection->basicEvent.fd = -1;
+		connection->basicEvent.fd = INVALID_SOCKET;
 	}
 
 	if( connection->closeCB ) {
@@ -119,7 +127,7 @@ static inline void le_initWriteReq(le_TcpConnection* connection, le_WriteReq* re
 }
 
 static inline void le_initBasicEvent(le_TcpBasicEvent* basicEvent,le_processCB processCB) {
-	basicEvent->fd = -1;
+	basicEvent->fd = INVALID_SOCKET;
 	basicEvent->mask = 0;
 	basicEvent->processCB = processCB;
 }
@@ -132,7 +140,7 @@ void le_tcpServerInit(le_EventLoop* loop, le_TcpServer* server, le_connectionCB 
 	loop->server = server;
 	server->loop = loop;
 	server->masks = 0;
-	server->pendingAcceptFd = -1;
+	server->pendingAcceptFd = INVALID_SOCKET;
 	server->connectionCB = connectionCB;
 	server->closeCB = closeCB;
 
@@ -178,14 +186,18 @@ static inline void le_eventLoopInit(le_EventLoop* loop) {
 
 static inline int le_addEvent(le_EventLoop* loop, le_TcpBasicEvent* event, unsigned events) {
 	struct epoll_event ee;
-	int op = event->mask != 0? EPOLL_CTL_MOD: EPOLL_CTL_ADD;
+	unsigned mask = event->mask | events;
 
-	event->mask |= events;
-	ee.events = event->mask;
-	ee.data.u64 = 0;
-	ee.data.ptr = event;
+	if( mask != event->mask ) {
+		int op = event->mask != 0? EPOLL_CTL_MOD: EPOLL_CTL_ADD;
 
-	epoll_ctl(loop->epollFd, op, event->fd, &ee);
+		event->mask = mask;
+		ee.events = mask;
+		ee.data.u64 = 0;
+		ee.data.ptr = event;
+
+		epoll_ctl(loop->epollFd, op, event->fd, &ee);
+	}
 
 	return 0;
 }
@@ -193,14 +205,17 @@ static inline int le_addEvent(le_EventLoop* loop, le_TcpBasicEvent* event, unsig
 static inline int le_delEvent(le_EventLoop* loop,  le_TcpBasicEvent* event, unsigned events) {
 	struct epoll_event ee;
 	unsigned mask = event->mask & (~events);
-	int op = mask != 0? EPOLL_CTL_MOD: EPOLL_CTL_DEL;
 
-	event->mask = mask;
-	ee.events = mask;
-	ee.data.u64 = 0;
-	ee.data.ptr = event;
+	if( mask != event->mask ) {
+		int op = mask != 0? EPOLL_CTL_MOD: EPOLL_CTL_DEL;
 
-	epoll_ctl(loop->epollFd, op, event->fd, &ee);
+		event->mask = mask;
+		ee.events = mask;
+		ee.data.u64 = 0;
+		ee.data.ptr = event;
+
+		epoll_ctl(loop->epollFd, op, event->fd, &ee);
+	}
 
 	return 0;
 }
@@ -211,15 +226,18 @@ static inline void le_addConnection(le_EventLoop* loop, le_TcpConnection* connec
 	LE_INCREASE_EVENTS(loop);
 }
 
-static inline size_t le_bufsSize(const le_Buffer bufs[], unsigned bufCount) {
+static inline void le_initWriteReqBufs(le_WriteReq* req, const le_Buffer bufs[], unsigned bufCount) {
 	unsigned i;
 	size_t size = 0;
+	le_Buffer* reqBufs = req->bufs;
 
 	for(i = 0; i < bufCount; ++i) {
 		size += bufs[i].len;
+		reqBufs[i].len = bufs[i].len;
+		reqBufs[i].base = bufs[i].base;
 	}
 
-	return size;
+	req->totalSize = size;
 }
 
 static inline int le_checkSocketError(int fd) {
@@ -270,13 +288,13 @@ int le_connect(le_TcpConnection* connection, const char* ip, int port, le_connec
 	addr.sin_addr.s_addr = inet_addr(ip);
 
 	basicEvent = &connection->basicEvent;
-	if( basicEvent->fd != -1 ) {
+	if( basicEvent->fd != INVALID_SOCKET ) {
 		le_setErrorCode(connection->loop, EINVAL);
 		return LE_ERROR;
 	}
 
 	basicEvent->fd = socket(AF_INET, SOCK_STREAM, 0);
-	if( basicEvent->fd == -1 ) {
+	if( basicEvent->fd == INVALID_SOCKET ) {
 		le_setErrorCode(connection->loop, errno);
 		return LE_ERROR;
 	}
@@ -298,12 +316,12 @@ int le_connect(le_TcpConnection* connection, const char* ip, int port, le_connec
 		}
 		break;
 	}
-	
+
 	basicEvent->processCB = le_connectorProcessCB;
 	connection->connectCB = cb;
 	le_addEvent(connection->loop, basicEvent, EPOLLOUT);
 	LE_INCREASE_EVENTS(connection->loop);
-	
+
 	return LE_OK;
 }
 
@@ -343,20 +361,21 @@ static inline void le_writeComplete(le_WriteReq* req, int status) {
     if( status == 0 ) {
         req->writeCB(req, req->totalSize);
 		if( le_queueEmpty(&connection->writeReqHead) ) {
+			assert(connection->writeTotalSize == 0);
+			le_delEvent(connection->loop, &connection->basicEvent, EPOLLOUT);
+
 			if( connection->masks & LE_CLOSING ) {
 				le_connectionOver(connection);
 			} else if( connection->masks & LE_SHUTDOWN_WRITE ) {
-    			//le_delEvent(connection->loop, &connection->basicEvent, EPOLLOUT);
 				shutdown(connection->basicEvent.fd, SHUT_WR);
-			} 
+			}
 		}
     } else {
+		le_delEvent(connection->loop, &connection->basicEvent, EPOLLOUT);
 		le_setErrorCode(connection->loop, errno);
 		connection->masks |= LE_SHUTDOWN_WRITE;
-        //connection->writeTotalSize -= le_bufsSize(req->bufs + req->bufIndex, req->bufCount - req->bufIndex);
         req->writeCB(req, status);
 
-		//le_delEvent(connection->loop, &connection->basicEvent, EPOLLOUT);
 		le_deleteWriteReqs(connection, status);
 		le_forceCloseConnection(connection);
     }
@@ -391,20 +410,19 @@ static void le_processWriting(le_TcpConnection* connection) {
 
 		do {
 			buf = &(req->bufs[req->bufIndex]);
-			len = buf->len;
+			connection->writeTotalSize -= n;
 
-			if( (size_t)n < len ) {
+			if( (size_t)n < buf->len ) {
 				buf->base += n;
 				buf->len -= n;
-				connection->writeTotalSize -= n;
 				break;
 			} else {
+				n -= buf->len;
 				req->bufIndex++;
-				connection->writeTotalSize -= n;
 
 				if( req->bufIndex == req->bufCount ) {
 					// write over!!!!
-					assert(connection->writeTotalSize == 0);
+					assert(n == 0);
 					le_writeComplete(req, LE_OK);
 					break;
 				}
@@ -431,7 +449,7 @@ int le_write(le_TcpConnection* connection, le_WriteReq* req, le_Buffer bufs[], i
 		return LE_ERROR;
 	}
 
-	if( bufCount > MAX_BUFS_COUNT ) {
+	if( bufCount > MAX_BUFS_COUNT || bufCount < 1 ) {
 		le_setErrorCode(connection->loop, EINVAL);
 		return LE_ERROR;
 	}
@@ -441,17 +459,19 @@ int le_write(le_TcpConnection* connection, le_WriteReq* req, le_Buffer bufs[], i
 	if( bufCount <= LE_ARRAY_SIZE(req->bufsml) ) {
 		req->bufs = req->bufsml;
 	} else {
-		req->bufs = malloc(bufCount * sizeof(bufs[0]));
+		req->bufs = malloc(bufCount * sizeof(le_Buffer));
 	}
 
-	memcpy(req->bufs, bufs, bufCount * sizeof(bufs[0]));
+	le_initWriteReqBufs(req, bufs, bufCount);
 	bufRemainSize = connection->writeTotalSize;
 	le_queueAdd(&connection->writeReqHead, &req->writeReqNode);
-	req->totalSize = le_bufsSize(bufs, bufCount);
 	connection->writeTotalSize += req->totalSize;
 
 	if( bufRemainSize == 0 ) {
 		le_processWriting(connection);
+		if( connection->writeTotalSize > 0 ) {
+			le_addEvent(connection->loop, &connection->basicEvent, EPOLLOUT);
+		}
 	}
 
 	return LE_OK;
@@ -505,9 +525,9 @@ static void le_processReading(le_TcpConnection* connection) {
 	connection->masks |= LE_QUEUE_READ;
 
 	connection->allocCB(connection, &buf);
-	
+
 	bytes = read(connection->basicEvent.fd, buf.base, buf.len);
-	
+
 	if( bytes > 0 ) {
 		connection->readCB(connection, bytes, buf.base);
 	} else if( bytes == 0 ) {
@@ -532,16 +552,31 @@ static void le_processReading(le_TcpConnection* connection) {
 }
 
 int le_accept(le_TcpServer* server, le_TcpConnection* client) {
-	if( server->pendingAcceptFd == -1 ) {
+	if( server->pendingAcceptFd == INVALID_SOCKET ) {
 		le_setErrorCode(server->loop, EINVAL);
 		return LE_ERROR;
 	}
 
 	le_addConnection(server->loop, client);
 	client->basicEvent.fd = server->pendingAcceptFd;
-	server->pendingAcceptFd = -1;
+	server->pendingAcceptFd = INVALID_SOCKET;
 
 	return LE_OK;
+}
+
+static void le_closeAllConnections(le_TcpServer* server) {
+	le_Queue* node;
+	le_Queue* head;
+	le_TcpConnection* connection;
+
+	head = &server->loop->connectionsHead;
+
+	while (!le_queueEmpty(head)) {
+		node = le_queueNext(head);
+		connection = LE_CONTAINING_RECORD(node, le_TcpConnection, connectionNode);
+
+		le_forceCloseConnection(connection);
+	}
 }
 
 int le_serverClose(le_TcpServer* server) {
@@ -550,20 +585,21 @@ int le_serverClose(le_TcpServer* server) {
 		return LE_ERROR;
 	}
 
-	if( server->basicEvent.fd == -1 ) {
+	if( server->basicEvent.fd == INVALID_SOCKET ) {
 		le_setErrorCode(server->loop, ENOTSOCK);
 		return LE_ERROR;
 	}
 
-    if( server->pendingAcceptFd != -1 ) {
+    if( server->pendingAcceptFd != INVALID_SOCKET ) {
 		close(server->pendingAcceptFd);
-		server->pendingAcceptFd = -1;
+		server->pendingAcceptFd = INVALID_SOCKET;
 	}
 
 	server->masks &= ~LE_LISTENING;
 	close(server->basicEvent.fd);
-	server->basicEvent.fd = -1;
+	server->basicEvent.fd = INVALID_SOCKET;
 
+	le_closeAllConnections(server);
 	le_serverOver(server);
 
 	return LE_OK;
@@ -594,7 +630,7 @@ int le_connectionClose(le_TcpConnection* connection) {
 		return LE_ERROR;
 	}
 
-	if( connection->basicEvent.fd == -1 ) {
+	if( connection->basicEvent.fd == INVALID_SOCKET ) {
 		le_setErrorCode(connection->loop, ENOTSOCK);
 		return LE_ERROR;
 	}
@@ -606,7 +642,7 @@ int le_connectionClose(le_TcpConnection* connection) {
         le_connectionOver(connection);
 	} else {
 		close(connection->basicEvent.fd);
-		connection->basicEvent.fd == -1;
+		connection->basicEvent.fd == INVALID_SOCKET;
 	}
 	//} else if( connection->masks & LE_READING ) {
 	//	le_stopRead(connection);
@@ -620,10 +656,10 @@ static inline void le_connectionProcessCB(le_TcpBasicEvent* basicEvent, unsigned
 
 	if( events & EPOLLIN ) {
 		le_processReading(connection);
-	} else if( events & EPOLLOUT ) {
+	}
+
+	if( events & EPOLLOUT ) {
 		le_processWriting(connection);
-	} else {
-		assert(0);
 	}
 }
 
@@ -635,7 +671,7 @@ static inline void le_serverProcessCB(le_TcpBasicEvent* basicEvent, unsigned eve
 
 	while( 1 ) {
         afd = accept(basicEvent->fd, (struct sockaddr*)&addr, &len);
-        if( afd == -1 ) {
+        if( afd == INVALID_SOCKET ) {
 			if( errno == EINTR ) {
                 continue;
 			} else {
@@ -656,7 +692,7 @@ static inline void le_serverProcessCB(le_TcpBasicEvent* basicEvent, unsigned eve
 	server->pendingAcceptFd	= afd;
 	server->connectionCB(server, LE_OK);
 
-	if( server->pendingAcceptFd != -1 ) {
+	if( server->pendingAcceptFd != INVALID_SOCKET ) {
 		le_delEvent(server->loop, basicEvent, EPOLLIN);
 	}
 }
@@ -687,11 +723,11 @@ static inline void le_channelProcessCB(le_TcpBasicEvent* basicEvent, unsigned ev
 	le_Channel* activityChannel;
 
 	bytes = read(basicEvent->fd, &value, sizeof(value));
-	
+
 	if( bytes != sizeof(value) ) {
 		le_abort("le_channelProcessCB fail!(error no: %u, %s)\n", errno, le_strerror(errno));
 	}
-	
+
 	loop = LE_CONTAINING_RECORD(basicEvent, le_EventLoop, channelEvent);
 	loop->posting = 0;
 
@@ -715,13 +751,21 @@ static inline void le_channelProcessCB(le_TcpBasicEvent* basicEvent, unsigned ev
 static inline int le_channelEventInit(le_EventLoop* loop) {
 	int eventFd;
 	le_TcpBasicEvent* channelEvent = &loop->channelEvent;
-    
-	if( channelEvent->fd != -1 ) {
+
+	if( channelEvent->fd != INVALID_SOCKET ) {
 		return LE_OK;
 	}
 
+	// int eventfd(unsigned int initval, int flags);
+	// eventfd better than pipe;
+	// creates an "eventfd object" that can be used as an event
+    // wait/notify mechanism by user-space applications, and by the kernel
+    // to notify user-space applications of events.  The object contains an
+    // unsigned 64-bit integer (uint64_t) counter that is maintained by the
+    // kernel.  This counter is initialized with the value specified in the
+    // argument initval.
 	eventFd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
-	if( eventFd == - 1 ) {
+	if( eventFd == INVALID_SOCKET ) {
 		return LE_ERROR;
 	}
 
@@ -758,17 +802,17 @@ int le_channelPost(le_Channel* channel) {
 		return LE_ERROR;
 	}
 
-	if( LE_ACCESS_ONCE(long, channel->pending) == 1 ) { // do simply check and stop compiler from optimizing
+	if( LE_ACCESS_ONCE(long, channel->pending) == 1 ) { // cheap check and stop compiler from optimizing
 		return LE_OK;
 	}
 
 	if( __sync_val_compare_and_swap(&channel->pending, 0, 1) == 0 ) {
 		int bytes;
 		le_EventLoop* loop = channel->loop;
-		
+
 		le_safeQueueAdd(&loop->pendingChannels, &channel->pendingNode);
 
-		if( LE_ACCESS_ONCE(long, loop->posting) == 1 ) { // do simply check and stop compiler from optimizing
+		if( LE_ACCESS_ONCE(long, loop->posting) == 1 ) { // cheap check and stop compiler from optimizing
 			return LE_OK;
 		}
 
@@ -777,7 +821,7 @@ int le_channelPost(le_Channel* channel) {
 		}
 
 		bytes = write(loop->channelEvent.fd, (void*)&le_channelBytes, sizeof(le_channelBytes)); // wake up loop
-        
+
 		if( bytes == sizeof(le_channelBytes) ) {
 			return LE_OK;
 		} else if( bytes == -1 ) {
@@ -819,13 +863,13 @@ int le_bind(le_TcpServer* server, const char * ip, int port) {
 	addr.sin_addr.s_addr = inet_addr(ip);
 
 	basicEvent = &server->basicEvent;
-	if( basicEvent->fd != -1 ) {
+	if( basicEvent->fd != INVALID_SOCKET ) {
 		le_setErrorCode(server->loop, EINVAL);
 		return LE_ERROR;
 	}
 
 	basicEvent->fd = socket(AF_INET, SOCK_STREAM, 0);
-	if( basicEvent->fd == -1 ) {
+	if( basicEvent->fd == INVALID_SOCKET ) {
 		le_setErrorCode(server->loop, errno);
 		return LE_ERROR;
 	}
@@ -852,7 +896,7 @@ int le_bind(le_TcpServer* server, const char * ip, int port) {
 int le_listen(le_TcpServer* server, int backlog) {
 	le_TcpBasicEvent* basicEvent = &server->basicEvent;
 
-	if( basicEvent->fd == -1 ) {
+	if( basicEvent->fd == INVALID_SOCKET ) {
 		le_setErrorCode(server->loop, EINVAL);
 		return LE_ERROR;
 	}
@@ -939,7 +983,7 @@ le_EventLoop* le_eventLoopCreate() {
 void le_eventLoopDelete(le_EventLoop* loop) {
 	le_timerHeapFree(loop->timerHeap);
 	le_safeQueueDestroy(&loop->pendingChannels);
-	if( loop->channelEvent.fd != -1 ) {
+	if( loop->channelEvent.fd != INVALID_SOCKET ) {
 		close(loop->channelEvent.fd);
 	}
 	close(loop->epollFd);
@@ -947,4 +991,6 @@ void le_eventLoopDelete(le_EventLoop* loop) {
 	le_free(loop);
 }
 
-
+#undef IOV_MAX
+#undef INVALID_SOCKET
+#undef le_forceCloseConnection

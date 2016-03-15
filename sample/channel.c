@@ -1,3 +1,8 @@
+//////////////////////////////////////////////////////////////////////////////////////
+// Mail: radiotail86@gmail.com
+// About the details of license, please read LICENSE
+//////////////////////////////////////////////////////////////////////////////////////
+
 #include <stdio.h>
 #include "lasev.h"
 #include <malloc.h>
@@ -137,8 +142,9 @@ void unhookSignals() {
 static void* worker(void* arg) {
 	int i;
 	
-	for(i = 0; i < SEND_CHANNEL_COUNT; i += 2) {
-		printf("worker loop!\n");
+	printf("worker loop!\n");
+
+	for( i = 0; i < SEND_CHANNEL_COUNT; i += 2 ) {
 		printf("post channel: %d, %p\n", i, &sendChannels[i]);
 		le_channelPost(&sendChannels[i]);
 		printf("post channel: %d, %p\n", i + 1, &sendChannels[i + 1]);
@@ -179,7 +185,7 @@ int main() {
 		printf("le_listen success!\n");
 	}
 
-	for(i = 0; i < SEND_CHANNEL_COUNT; ++i) {
+	for( i = 0; i < SEND_CHANNEL_COUNT; ++i ) {
 		le_channelInit(loop, &sendChannels[i], sendChannelCB, sendChannelClose);
 	}
 

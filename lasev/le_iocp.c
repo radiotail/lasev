@@ -1,3 +1,8 @@
+//////////////////////////////////////////////////////////////////////////////////////
+// Mail: radiotail86@gmail.com
+// About the details of license, please read LICENSE
+//////////////////////////////////////////////////////////////////////////////////////
+
 #include "lasev.h"
 #include "le_internal.h"
 #include "le_timerHeap.h"
@@ -50,7 +55,7 @@ const char* le_strerror(int err) {
 		loop->errorCode = GetLastError();	\
 	} while(0)
 
-int le_getErrorCode(le_EventLoop* loop) { 
+int le_getErrorCode(le_EventLoop* loop) {
 	return loop->errorCode;
 }
 
@@ -97,7 +102,7 @@ static inline void le_connectionOver(le_TcpConnection* connection) {
 		closesocket(connection->socket);
 		connection->socket = INVALID_SOCKET;
 	}
-	
+
 	if( connection->closeCB ) {
 		connection->closeCB(connection);
 	}
@@ -110,7 +115,7 @@ static inline void le_serverOver(le_TcpServer* server) {
 
 	if( server->closeCB ) {
 		server->closeCB(server);
-	}	
+	}
 }
 
 #define le_forceCloseConnection(connection)   \
@@ -165,7 +170,7 @@ static inline void le_eventLoopInit(le_EventLoop* loop) {
 	if( !loop->iocp ) {
 		le_abort("create iocp fail!(error no: %d)", GetLastError());
 	}
-	
+
 	loop->server = NULL;
 	loop->eventsCount = 0;
 	loop->errorCode = 0;
@@ -175,10 +180,10 @@ static inline void le_eventLoopInit(le_EventLoop* loop) {
 	loop->channelReq.type = LE_POST;
 	loop->maxOverlappeds = LE_OVERLAPEDS_COUNT;
 	loop->overlappeds = (LPOVERLAPPED_ENTRY)le_malloc((pGetQueuedCompletionStatusEx? loop->maxOverlappeds: 1) * sizeof(OVERLAPPED_ENTRY));
-	
+
 	le_updateNowTime(loop);
 	loop->timerHeap = le_timerHeapNew(32);
-	
+
 	le_queueInit(&loop->channelHead);
 	le_queueInit(&loop->connectionsHead);
 	le_safeQueueInit(&loop->pendingChannels);
@@ -259,7 +264,7 @@ static inline int le_bindForConnecting(le_EventLoop* loop, le_TcpConnection* con
 	bindAddr.sin_port = 0;
 	bindAddr.sin_addr.s_addr = INADDR_ANY;
 
-	if( bind(connection->socket, (struct sockaddr*)&bindAddr, sizeof(struct sockaddr)) == SOCKET_ERROR ) {	
+	if( bind(connection->socket, (struct sockaddr*)&bindAddr, sizeof(struct sockaddr)) == SOCKET_ERROR ) {
 		le_setErrorCode(loop, WSAGetLastError());
 		closesocket(connection->socket);
 		return LE_ERROR;
@@ -273,7 +278,7 @@ int le_connect(le_TcpConnection* connection, const char* ip, int port, le_connec
 	le_ConnectReq* req;
 	struct sockaddr_in serverAddr;
 	le_EventLoop* loop = connection->loop;
-	
+
 	assert(cb);
 
 	if( connection->masks & (LE_CONNECTING | LE_CONNECTION) ) {
@@ -286,11 +291,11 @@ int le_connect(le_TcpConnection* connection, const char* ip, int port, le_connec
 		le_setErrorCode(loop, WSAGetLastError());
 		return LE_ERROR;
 	}
-	
+
 	if( le_bindForConnecting(loop, connection) == LE_ERROR ) {
 		return LE_ERROR;
 	}
-	
+
 	if( loop->connectex == NULL ) {
 		const GUID wsaidConnectex = WSAID_CONNECTEX;
 		loop->connectex = (LPFN_CONNECTEX)le_getWinsockFuncEx(connection->socket, wsaidConnectex);
@@ -447,7 +452,7 @@ static inline int le_queueRead(le_TcpConnection* connection, le_ReadReq* req) {
 	DWORD flags = 0;
 
 	memset(&req->overlapped, 0, sizeof(req->overlapped));
-	
+
 	result = WSARecv(connection->socket,
 					 (WSABUF*)&le_sharedZeroBuf,
 					 1,
@@ -481,7 +486,7 @@ int le_startRead(le_TcpConnection* connection, le_readCB readCB, le_allocCB allo
 		le_setErrorCode(connection->loop, WSAEALREADY);
 		return LE_ERROR;
 	}
-	
+
 	connection->readCB = readCB;
 	connection->allocCB = allocCB;
 	connection->masks |= LE_READING;
@@ -501,7 +506,7 @@ int le_stopRead(le_TcpConnection* connection) {
 		le_setErrorCode(connection->loop, WSAEALREADY);
 		return LE_ERROR;
 	}
-	
+
 	connection->masks &= ~LE_READING;
 
 	return LE_OK;
@@ -576,7 +581,7 @@ int le_write(le_TcpConnection* connection, le_WriteReq* req, le_Buffer bufs[], i
 
 	le_initWriteReq(connection, req, cb);
 	memset(&req->overlapped, 0, sizeof(req->overlapped));
-	
+
 	result = WSASend(connection->socket,
 					 (WSABUF*)bufs,
 					 bufCount,
@@ -585,7 +590,7 @@ int le_write(le_TcpConnection* connection, le_WriteReq* req, le_Buffer bufs[], i
 					 &req->overlapped,
 					 NULL);
 
-	if( LE_SUCCEEDED_WITH_IOCP(result == ERROR_SUCCESS) ) {;
+	if( LE_SUCCEEDED_WITH_IOCP(result == ERROR_SUCCESS) ) {
 		connection->pendingWriteReqs++;
 	} else {
 		le_setErrorCode(connection->loop, WSAGetLastError());
@@ -603,10 +608,10 @@ static inline void le_processWriteReq(le_TcpConnection* connection, le_WriteReq*
 		req->writeCB(req, LE_ERROR);
 		le_forceCloseConnection(connection);
 	}
-	
+
 	connection->pendingWriteReqs--;
-	if( (connection->masks & LE_CLOSING) && 
-		!(connection->masks & LE_QUEUE_READ) && 
+	if( (connection->masks & LE_CLOSING) &&
+		!(connection->masks & LE_QUEUE_READ) &&
 		(connection->pendingWriteReqs == 0) ) {
 		le_connectionOver(connection);
 	}
@@ -626,7 +631,7 @@ static inline void le_channelOver(le_Channel* channel) {
 
 	if( channel->closeCB ) {
 		channel->closeCB(channel);
-	}	
+	}
 }
 
 int le_channelInit(le_EventLoop* loop, le_Channel* channel, le_channelCB channelCB, le_channelCloseCB closeCB) {
@@ -649,7 +654,7 @@ static inline void le_processChannelReq(le_EventLoop* loop, le_ChannelReq* req) 
 	le_Queue* channelNode;
 	le_Queue activityChannels;
 	le_Channel* activityChannel;
-	
+
 	loop->posting = 0;
 
 	le_safeQueueSwap(&loop->pendingChannels, &activityChannels);
@@ -680,17 +685,17 @@ int le_channelPost(le_Channel* channel) {
 
 	if( InterlockedExchange(&channel->pending, 1) == 0 ) {
 		le_EventLoop* loop = channel->loop;
-		
+
 		le_safeQueueAdd(&loop->pendingChannels, &channel->pendingNode);
-		
+
 		if( LE_ACCESS_ONCE(long, loop->posting) == 1 ) { // do simply check and stop compiler from optimizing
 			return LE_OK;
 		}
-		
+
 		if( InterlockedExchange(&loop->posting, 1) == 1 ) {
 			return LE_OK;
 		}
-		
+
 		if( !PostQueuedCompletionStatus(loop->iocp, 0, 0, &loop->channelReq.overlapped) ) { // wake up loop
 			le_abort("PostQueuedCompletionStatus fail!(error no: %d)\n", GetLastError());
 		}
@@ -770,7 +775,7 @@ static void le_pollEx(le_EventLoop* loop, le_time_t timeout) {
 	unsigned i;
 	ULONG count;
 	LPOVERLAPPED_ENTRY entrys = loop->overlappeds;
-	
+
 	result = pGetQueuedCompletionStatusEx(loop->iocp,
 										  entrys,
 										  loop->maxOverlappeds,
@@ -790,6 +795,21 @@ static void le_pollEx(le_EventLoop* loop, le_time_t timeout) {
 	}
 }
 
+static void le_closeAllConnections(le_TcpServer* server) {
+	le_Queue* node;
+	le_Queue* head;
+	le_TcpConnection* connection;
+
+	head = &server->loop->connectionsHead;
+
+	while (!le_queueEmpty(head)) {
+		node = le_queueNext(head);
+		connection = LE_CONTAINING_RECORD(node, le_TcpConnection, connectionNode);
+		le_forceCloseConnection(connection);
+		le_queueRemove(node);
+	}
+}
+
 int le_serverClose(le_TcpServer* server) {
 	if( !(server->masks & LE_LISTENING) ) {
 		le_setErrorCode(server->loop, WSAEINVAL);
@@ -804,7 +824,9 @@ int le_serverClose(le_TcpServer* server) {
 	server->masks &= ~LE_LISTENING;
 	closesocket(server->socket);
 	server->socket = INVALID_SOCKET;
-	
+
+	le_closeAllConnections(server);
+
 	if( server->pendingAcceptReqs == 0 ) {
 		le_serverOver(server);
 	}
@@ -880,7 +902,7 @@ int le_bind(le_TcpServer* server, const char * ip, int port) {
 		return LE_ERROR;
 	}
 
-	if( bind(server->socket, (struct sockaddr*)&addr, sizeof(struct sockaddr)) == SOCKET_ERROR ) {	
+	if( bind(server->socket, (struct sockaddr*)&addr, sizeof(struct sockaddr)) == SOCKET_ERROR ) {
 		le_setErrorCode(server->loop, WSAGetLastError());
 		closesocket(server->socket);
 		return LE_ERROR;
@@ -981,8 +1003,8 @@ static inline void le_winInit() {
 
 le_EventLoop* le_eventLoopCreate() {
 	le_EventLoop* loop;
-	
-	if( InterlockedCompareExchange(&le_initFlag, 1, 0) == 0 ){
+
+	if( InterlockedCompareExchange(&le_initFlag, 1, 0) == 0 ) {
 		le_winInit(); // init windows api once
 	}
 
@@ -1003,4 +1025,11 @@ void le_eventLoopDelete(le_EventLoop* loop) {
 	le_free(loop->overlappeds);
 	le_free(loop);
 }
+
+#undef LE_NT_ERROR
+#undef LE_NT_SUCCESS
+#undef LE_GET_WRITE_BYTES
+#undef LE_SUCCEEDED_WITH_IOCP
+#undef le_setErrorCodeByNtStatus
+#undef le_forceCloseConnection
 

@@ -1,3 +1,8 @@
+//////////////////////////////////////////////////////////////////////////////////////
+// Mail: radiotail86@gmail.com
+// About the details of license, please read LICENSE
+//////////////////////////////////////////////////////////////////////////////////////
+
 #include <stdio.h>
 #include "lasev.h"
 #include <stdlib.h>
@@ -108,7 +113,7 @@ int main(int argc, char **argv) {
 	le_EventLoop* loop;
 	int clientCount = 100;
 
-	msgLen = 64;
+	msgLen = 2048;
 	msgText = malloc(msgLen);
 	for( i = 0; i < msgLen; ++i) {
 		msgText[i] = i % 26 + 65;
@@ -116,7 +121,7 @@ int main(int argc, char **argv) {
 
 	printf("client started!\n");
 	printf("client count: %d\n", clientCount);
-	printf("test time: %d\n", timeLimit);
+	printf("test time: %lu\n", timeLimit);
 
 	loop = le_eventLoopCreate();
 

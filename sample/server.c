@@ -1,14 +1,21 @@
+//////////////////////////////////////////////////////////////////////////////////////
+// Mail: radiotail86@gmail.com
+// About the details of license, please read LICENSE
+//////////////////////////////////////////////////////////////////////////////////////
+
 #include <stdio.h>
 #include "lasev.h"
 #include <malloc.h>
 #include <signal.h>
-#include <vld.h>
+//#include <vld.h>
 
-#define TEXT_LEN 64
+#define TEXT_LEN 1024
 static char text[TEXT_LEN] = {0};
 static le_TcpServer* server;
 static le_EventLoop* loop;
 static le_Channel* channel;
+static int rbytes = 0;
+static int sbytes = 0;
 
 static void errorLog(le_EventLoop* loop, const char* title) {
 	int err = le_getErrorCode(loop);
@@ -34,7 +41,17 @@ void shutdownCB(le_TcpConnection* client) {
 }
 
 void writeCB(le_WriteReq* req, int bytes) {
+	//free(req->data);
 	free(req);
+
+	if (bytes == LE_ERROR) {
+		int err = le_getErrorCode(loop);
+		printf("write error: (%d)%s\n", err, le_strerror(err));
+		return;
+	}
+
+	sbytes += bytes;
+	printf("writeCB len: %d\n", bytes);
 }
 
 static void sendMsg(le_TcpConnection* client, const char* text, int bytes) {
@@ -42,10 +59,17 @@ static void sendMsg(le_TcpConnection* client, const char* text, int bytes) {
 	le_Buffer sendbuf;
 	le_WriteReq* req;
 
-	sendbuf.base = (char*)text;
-	sendbuf.len = bytes;
-	req = (le_WriteReq*)malloc(sizeof(le_WriteReq));
+	/*sendbuf.base = (char*)malloc(65535);
+	memset(sendbuf.base, 0, 65535);
+	sendbuf.len = 65535;*/
 
+	sendbuf.base = (char*)text;
+	memset(sendbuf.base, 0, bytes);
+	sendbuf.len = bytes;
+
+	req = (le_WriteReq*)malloc(sizeof(le_WriteReq));
+	req->data = (void*)sendbuf.base;
+	
 	result = le_write(client, req, &sendbuf, 1, writeCB);
 	if( result ) {
 		free(req);
@@ -58,9 +82,9 @@ void readCB(le_TcpConnection* client, int bytes, char* buf) {
 		le_connectionClose(client);
 		return;
 	}
-	//printf("readCB: %d\n", bytes);
-
-	//sendMsg(client, buf, bytes);
+	printf("readCB text len: %d\n", bytes);
+	rbytes += bytes;
+	
 	sendMsg(client, buf, bytes);
 }
 
@@ -85,7 +109,8 @@ void connectionCB(le_TcpServer* server, int status) {
 	if( result ) {
 		errorLog(server->loop, "le_setTcpNoDelay");
 	}
-
+	
+	//sendMsg(client, "", 0);
 	result = le_startRead(client, readCB, allocaCB);
 	if( result ) {
 		errorLog(server->loop, "le_startRead");
@@ -155,6 +180,8 @@ int main() {
 	le_run(loop);
 
 	le_eventLoopDelete(loop);
+	
+	printf("rbytes: %d, sbytes: %d\n", rbytes, sbytes);
 
 	printf("<--------lasev closed!-------->\n");
 	unhookSignals();

@@ -1,3 +1,8 @@
+//////////////////////////////////////////////////////////////////////////////////////
+// Mail: radiotail86@gmail.com
+// About the details of license, please read LICENSE
+//////////////////////////////////////////////////////////////////////////////////////
+
 #include <stdio.h>
 #include "lasev.h"
 #include <stdlib.h>
@@ -38,8 +43,8 @@ static void sendMsg(le_TcpConnection* client) {
 	le_Buffer sendbuf;
 	le_WriteReq* req;
 
-	sprintf(buff, "%lu\0", le_getNowTime(client->loop));
-	printf("sendMsg: (%d)%s\n", strlen(buff) + 1, buff);
+	sprintf(buff, "%lu", (unsigned long)le_getNowTime(client->loop));
+	printf("sendMsg: (%lu)%s\n", strlen(buff) + 1, buff);
 
 	sendbuf.base = (char*)buff;
 	sendbuf.len = strlen(buff) + 1;

@@ -17,6 +17,8 @@
 
 #define LE_DEFAULT_EVENTS 1024
 
+#define LE_EXTERN extern
+
 struct le_TcpBasicEvent;
 typedef void (*le_processCB)(struct le_TcpBasicEvent* event, unsigned int events);
 

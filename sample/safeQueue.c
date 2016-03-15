@@ -90,7 +90,7 @@ void sendChannelCB(le_Channel* channel, int status) {
 		free(p);
 	}
 
-	printf("outo sendChannelCB!\n");
+	printf("out sendChannelCB!\n");
 }
 
 void connectionCB(le_TcpServer* server, int status) {

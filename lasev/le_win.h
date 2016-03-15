@@ -1,9 +1,22 @@
+//////////////////////////////////////////////////////////////////////////////////////
+// Mail: radiotail86@gmail.com
+// About the details of license, please read LICENSE
+//////////////////////////////////////////////////////////////////////////////////////
+
 #ifndef LE_WIN_H_
 #define LE_WIN_H_
 
 #include <WinSock2.h>
 #include <MSWSock.h>
 #include <process.h>
+
+#if defined(LE_BUILD_AS_DLL)
+# define LE_EXTERN __declspec(dllexport) // export dll
+#elif defined(LE_USE_AS_DLL)
+# define LE_EXTERN __declspec(dllimport) // import dll
+#else
+# define LE_EXTERN extern
+#endif
 
 #define LE_OVERLAPEDS_COUNT 128
 #define LE_QUEUED_ACCEPTS_COUNT 32
@@ -80,9 +93,9 @@ typedef struct le_ChannelReq
 
 struct le_TcpConnection;
 
-int le__setTcpNoDelay(struct le_EventLoop* loop, int socket, int enable);
-int le__setTcpKeepAlive(struct le_EventLoop* loop, int socket, int enable);
-int le__setTcpSendBuffer(struct le_EventLoop* loop, int socket, int size);
+LE_EXTERN int le__setTcpNoDelay(struct le_EventLoop* loop, int socket, int enable);
+LE_EXTERN int le__setTcpKeepAlive(struct le_EventLoop* loop, int socket, int enable);
+LE_EXTERN int le__setTcpSendBuffer(struct le_EventLoop* loop, int socket, int size);
 
 #define le_setPlatformTcpNoDelay(tcpEvent, enable) \
 	le__setTcpNoDelay(tcpEvent->loop, tcpEvent->socket, enable)
@@ -100,12 +113,12 @@ typedef struct thread_params {
 	void* arg;
 } thread_params;
 
-#define pthread_t unsigned
+typedef unsigned pthread_t;
 #define pthread_self() GetCurrentThreadId()
-int pthread_create(pthread_t *thread, const void* unused, void* (*start_routine)(void* ), void* arg);
-int pthread_join(pthread_t thread, void** unused);
+LE_EXTERN int pthread_create(pthread_t *thread, const void* unused, void* (*start_routine)(void*), void* arg);
+LE_EXTERN int pthread_join(pthread_t thread, void** unused);
 
-#define pthread_mutex_t CRITICAL_SECTION
+typedef CRITICAL_SECTION pthread_mutex_t;
 #define pthread_mutex_init(a, b) InitializeCriticalSection((a))
 #define pthread_mutex_destroy(a) DeleteCriticalSection((a))
 #define pthread_mutex_lock EnterCriticalSection
