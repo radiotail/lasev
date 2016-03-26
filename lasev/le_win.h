@@ -43,6 +43,7 @@ typedef struct le_AcceptReq
 {
 	LE_BASE_REQ_MEMBERS
 	SOCKET socket;
+	struct le_TcpServer* server;
 	char buffer[sizeof(struct sockaddr_storage) * 2 + 32];
 } le_AcceptReq;
 

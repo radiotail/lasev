@@ -66,6 +66,7 @@ static inline void le_updateNowTime(le_EventLoop* loop) {
 static inline void le_initAcceptReq(le_TcpServer* server, le_AcceptReq* req) {
 	req->type = LE_ACCEPT;
 	req->socket = INVALID_SOCKET;
+	req->server = server;
 }
 
 static inline void le_initReadReq(le_TcpConnection* connection, le_ReadReq* req) {
@@ -109,6 +110,7 @@ static inline void le_connectionOver(le_TcpConnection* connection) {
 }
 
 static inline void le_serverOver(le_TcpServer* server) {
+	le_queueRemove(&server->serverNode);
 	LE_DECREASE_EVENTS(server->loop);
 
 	server->masks &= ~LE_LISTENING;
@@ -171,7 +173,6 @@ static inline void le_eventLoopInit(le_EventLoop* loop) {
 		le_abort("create iocp fail!(error no: %d)", GetLastError());
 	}
 
-	loop->server = NULL;
 	loop->eventsCount = 0;
 	loop->errorCode = 0;
 	loop->posting = 0;
@@ -186,14 +187,13 @@ static inline void le_eventLoopInit(le_EventLoop* loop) {
 
 	le_queueInit(&loop->channelHead);
 	le_queueInit(&loop->connectionsHead);
+	le_queueInit(&loop->serverHead);
 	le_safeQueueInit(&loop->pendingChannels);
 }
 
 void le_tcpServerInit(le_EventLoop* loop, le_TcpServer* server, le_connectionCB connectionCB, le_serverCloseCB closeCB) {
 	assert(connectionCB);
-	assert(!loop->server);
 
-	loop->server = server;
 	server->loop = loop;
 	server->masks = 0;
 	server->socket = INVALID_SOCKET;
@@ -201,6 +201,8 @@ void le_tcpServerInit(le_EventLoop* loop, le_TcpServer* server, le_connectionCB 
 	server->pendingAcceptReqs = 0;
 	server->connectionCB = connectionCB;
 	server->closeCB = closeCB;
+
+	le_queueAdd(&loop->serverHead, &server->serverNode);
 }
 
 void le_tcpConnectionInit(le_EventLoop* loop, le_TcpConnection* connection, le_connectionCloseCB closeCB) {
@@ -726,7 +728,7 @@ static inline void le_processReqs(le_EventLoop* loop, le_BaseReq* req) {
 	} else if( req->type == LE_WRITE ) {
 		le_processWriteReq(((le_WriteReq*)req)->connection, (le_WriteReq*)req);
 	} else if( req->type == LE_ACCEPT ) {
-		le_processAcceptReq(loop->server, (le_AcceptReq*)req);
+		le_processAcceptReq(((le_AcceptReq*)req)->server, (le_AcceptReq*)req);
 	} else if( req->type == LE_CONNECT ) {
 		le_processConnectReq(((le_ConnectReq*)req)->connection, (le_ConnectReq*)req);
 	} else if( req->type == LE_POST ) {
@@ -922,10 +924,12 @@ int le_listen(le_TcpServer* server, int backlog) {
 		return LE_ERROR;
 	}
 
-	loop->acceptex = (LPFN_ACCEPTEX)le_getWinsockFuncEx(server->socket, wsaidAcceptex);
 	if( loop->acceptex == NULL ) {
-		le_setErrorCode(loop, WSAGetLastError());
-		return LE_ERROR;
+		loop->acceptex = (LPFN_ACCEPTEX)le_getWinsockFuncEx(server->socket, wsaidAcceptex);
+		if( loop->acceptex == NULL ) {
+			le_setErrorCode(loop, WSAGetLastError());
+			return LE_ERROR;
+		}
 	}
 
 	if( listen(server->socket, backlog) == SOCKET_ERROR ) {

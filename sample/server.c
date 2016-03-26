@@ -96,7 +96,7 @@ void connectionCB(le_TcpServer* server, int status) {
 		errorLog(server->loop, "connectionCB");
 		return;
 	}
-
+	
 	client = (le_TcpConnection*)malloc(sizeof(le_TcpConnection));
 	le_tcpConnectionInit(server->loop, client, clientClose);
 

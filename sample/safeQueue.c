@@ -1,9 +1,14 @@
+//////////////////////////////////////////////////////////////////////////////////////
+// Mail: radiotail86@gmail.com
+// About the details of license, please read LICENSE
+//////////////////////////////////////////////////////////////////////////////////////
+
 #include <stdio.h>
 #include "lasev.h"
 #include <malloc.h>
 #include <signal.h>
 #include "le_safeQueue.h"
-#include <vld.h>
+//#include <vld.h>
 
 typedef struct Test 
 {

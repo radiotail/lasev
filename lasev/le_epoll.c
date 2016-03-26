@@ -1,3 +1,8 @@
+//////////////////////////////////////////////////////////////////////////////////////
+// Mail: radiotail86@gmail.com
+// About the details of license, please read LICENSE
+//////////////////////////////////////////////////////////////////////////////////////
+
 #include "lasev.h"
 #include "le_internal.h"
 #include "le_timerHeap.h"
@@ -103,7 +108,9 @@ static inline void le_connectionOver(le_TcpConnection* connection) {
 }
 
 static inline void le_serverOver(le_TcpServer* server) {
+	le_queueRemove(&server->serverNode);
 	LE_DECREASE_EVENTS(server->loop);
+
 	server->masks &= ~LE_LISTENING;
 
 	if( server->closeCB ) {
@@ -135,15 +142,14 @@ static inline void le_initBasicEvent(le_TcpBasicEvent* basicEvent,le_processCB p
 static inline void le_serverProcessCB(le_TcpBasicEvent* event, unsigned events);
 void le_tcpServerInit(le_EventLoop* loop, le_TcpServer* server, le_connectionCB connectionCB, le_serverCloseCB closeCB) {
 	assert(connectionCB);
-	assert(!loop->server);
 
-	loop->server = server;
 	server->loop = loop;
 	server->masks = 0;
 	server->pendingAcceptFd = INVALID_SOCKET;
 	server->connectionCB = connectionCB;
 	server->closeCB = closeCB;
 
+	le_queueAdd(&loop->serverHead, &server->serverNode);
 	le_initBasicEvent(&server->basicEvent, le_serverProcessCB);
 }
 
@@ -167,7 +173,6 @@ static inline void le_eventLoopInit(le_EventLoop* loop) {
 		le_abort("create epoll fail!(error no: %d)", errno);
 	}
 
-	loop->server = NULL;
 	loop->eventsCount = 0;
 	loop->errorCode = 0;
 	loop->posting = 0;
@@ -181,6 +186,7 @@ static inline void le_eventLoopInit(le_EventLoop* loop) {
 
 	le_queueInit(&loop->channelHead);
 	le_queueInit(&loop->connectionsHead);
+	le_queueInit(&loop->serverHead);
 	le_safeQueueInit(&loop->pendingChannels);
 }
 
@@ -338,7 +344,7 @@ static inline void le_deleteWriteReqs(le_TcpConnection* connection, int status) 
 		le_queueRemove(node);
 
 		if( req->bufs != req->bufsml ) {
-			free(req->bufs);
+			le_free(req->bufs);
 		}
 		req->bufs = NULL;
 
@@ -354,7 +360,7 @@ static inline void le_writeComplete(le_WriteReq* req, int status) {
     le_queueRemove(&req->writeReqNode);
 
     if( req->bufs != req->bufsml ) {
-        free(req->bufs);
+		le_free(req->bufs);
     }
     req->bufs = NULL;
 

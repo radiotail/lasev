@@ -104,6 +104,7 @@ typedef struct le_TcpServer
 	void* data;
 	unsigned masks;
 	struct le_EventLoop* loop;
+	le_Queue serverNode;
 	le_serverCloseCB closeCB;
 	le_connectionCB connectionCB;
 } le_TcpServer;
@@ -161,10 +162,10 @@ typedef struct le_EventLoop
 	unsigned eventsCount;
 	le_Queue channelHead;      // channels queue
 	le_Queue connectionsHead;  // connections queue
+	le_Queue serverHead;       // server queue
 	volatile long posting;     // channel posting flag
 	le_safeQueueHead pendingChannels; // pending channels queue
 	struct le_TimerHeap* timerHeap;
-	le_TcpServer* server;
 } le_EventLoop;
 
 // create event loop(none thread safe)
