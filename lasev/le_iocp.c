@@ -26,14 +26,16 @@ sGetQueuedCompletionStatusEx pGetQueuedCompletionStatusEx;
 
 static char le_strerrorBuf[128];
 const char* le_strerror(int err) {
-	DWORD size = FormatMessage(FORMAT_MESSAGE_FROM_SYSTEM |
-							   FORMAT_MESSAGE_IGNORE_INSERTS,
-							   NULL,
-							   err,
-							   0,
-							   le_strerrorBuf,
-							   128,
-							   NULL);
+	DWORD size;
+		
+	size = FormatMessage(FORMAT_MESSAGE_FROM_SYSTEM |
+						 FORMAT_MESSAGE_IGNORE_INSERTS,
+						 NULL,
+						 err,
+						 0,
+						 le_strerrorBuf,
+						 128,
+						 NULL);
 
 	if( size == 0 ) {
 		return (const char*)strerror(err);
@@ -77,6 +79,7 @@ static inline void le_initReadReq(le_TcpConnection* connection, le_ReadReq* req)
 static inline void le_initWriteReq(le_TcpConnection* connection, le_WriteReq* req, le_writeCB cb) {
 	assert(cb);
 	req->type = LE_WRITE;
+	req->data = NULL;
 	req->writeCB = cb;
 	req->connection = connection;
 }
@@ -89,6 +92,12 @@ static inline void le_initConnectReq(le_TcpConnection* connection, le_ConnectReq
 static inline void le_addConnection(le_EventLoop* loop, le_TcpConnection* connection) {
 	connection->masks |= LE_CONNECTION;
 	le_queueAdd(&loop->connectionsHead, &connection->connectionNode);
+	LE_INCREASE_EVENTS(loop);
+}
+
+static inline void le_addServer(le_EventLoop* loop, le_TcpServer* server) {
+	server->masks |= LE_LISTENING;
+	le_queueAdd(&loop->serverHead, &server->serverNode);
 	LE_INCREASE_EVENTS(loop);
 }
 
@@ -173,6 +182,7 @@ static inline void le_eventLoopInit(le_EventLoop* loop) {
 		le_abort("create iocp fail!(error no: %d)", GetLastError());
 	}
 
+	loop->data = NULL;
 	loop->eventsCount = 0;
 	loop->errorCode = 0;
 	loop->posting = 0;
@@ -196,18 +206,18 @@ void le_tcpServerInit(le_EventLoop* loop, le_TcpServer* server, le_connectionCB 
 
 	server->loop = loop;
 	server->masks = 0;
+	server->data = NULL;
 	server->socket = INVALID_SOCKET;
 	server->pendingAcceptReq = NULL;
 	server->pendingAcceptReqs = 0;
 	server->connectionCB = connectionCB;
 	server->closeCB = closeCB;
-
-	le_queueAdd(&loop->serverHead, &server->serverNode);
 }
 
 void le_tcpConnectionInit(le_EventLoop* loop, le_TcpConnection* connection, le_connectionCloseCB closeCB) {
 	connection->loop = loop;
 	connection->masks = 0;
+	connection->data = NULL;
 	connection->socket = INVALID_SOCKET;
 	connection->pendingWriteReqs = 0;
 	connection->closeCB = closeCB;
@@ -258,6 +268,7 @@ static inline int le_associateWithIocp(le_EventLoop* loop, SOCKET socket) {
 static inline int le_bindForConnecting(le_EventLoop* loop, le_TcpConnection* connection) {
 	struct sockaddr_in bindAddr;
 	if( le_associateWithIocp(loop, connection->socket) == LE_ERROR ) {
+		closesocket(connection->socket);
 		return LE_ERROR;
 	}
 
@@ -267,8 +278,8 @@ static inline int le_bindForConnecting(le_EventLoop* loop, le_TcpConnection* con
 	bindAddr.sin_addr.s_addr = INADDR_ANY;
 
 	if( bind(connection->socket, (struct sockaddr*)&bindAddr, sizeof(struct sockaddr)) == SOCKET_ERROR ) {
-		le_setErrorCode(loop, WSAGetLastError());
 		closesocket(connection->socket);
+		le_setErrorCode(loop, WSAGetLastError());
 		return LE_ERROR;
 	}
 
@@ -302,6 +313,7 @@ int le_connect(le_TcpConnection* connection, const char* ip, int port, le_connec
 		const GUID wsaidConnectex = WSAID_CONNECTEX;
 		loop->connectex = (LPFN_CONNECTEX)le_getWinsockFuncEx(connection->socket, wsaidConnectex);
 		if( loop->connectex == NULL ) {
+			closesocket(connection->socket);
 			le_setErrorCode(loop, WSAGetLastError());
 			return LE_ERROR;
 		}
@@ -329,6 +341,7 @@ int le_connect(le_TcpConnection* connection, const char* ip, int port, le_connec
 		connection->masks |= LE_CONNECTING;
 		LE_INCREASE_EVENTS(loop);
 	} else {
+		closesocket(connection->socket);
 		le_setErrorCode(loop, WSAGetLastError());
 		return LE_ERROR;
 	}
@@ -388,8 +401,8 @@ static inline int le_queueAccept(le_TcpServer* server, le_AcceptReq* req) {
 		req->socket = acceptSocket;
 		server->pendingAcceptReqs++;
 	} else {
-		le_setErrorCode(loop, WSAGetLastError());
 		closesocket(acceptSocket);
+		le_setErrorCode(loop, WSAGetLastError());
 		server->connectionCB(server, LE_ERROR);
 		return LE_ERROR;
 	}
@@ -640,6 +653,7 @@ int le_channelInit(le_EventLoop* loop, le_Channel* channel, le_channelCB channel
 	assert(channelCB);
 
 	channel->loop = loop;
+	channel->data = NULL;
 	channel->masks = 0;
 	channel->pending = 0;
 	channel->channelCB = channelCB;
@@ -866,6 +880,7 @@ int le_connectionClose(le_TcpConnection* connection) {
 
 	connection->masks |= LE_CLOSING;
 	connection->masks |= LE_SHUTDOWN_WRITE;
+	connection->masks &= ~LE_READING;
 
 	if( (connection->pendingWriteReqs == 0) && !(connection->masks & LE_QUEUE_READ) ) {
 		le_connectionOver(connection);
@@ -901,12 +916,13 @@ int le_bind(le_TcpServer* server, const char * ip, int port) {
 	}
 
 	if( le_associateWithIocp(server->loop, server->socket) == LE_ERROR ) {
+		closesocket(server->socket);
 		return LE_ERROR;
 	}
 
 	if( bind(server->socket, (struct sockaddr*)&addr, sizeof(struct sockaddr)) == SOCKET_ERROR ) {
-		le_setErrorCode(server->loop, WSAGetLastError());
 		closesocket(server->socket);
+		le_setErrorCode(server->loop, WSAGetLastError());
 		return LE_ERROR;
 	}
 
@@ -927,25 +943,24 @@ int le_listen(le_TcpServer* server, int backlog) {
 	if( loop->acceptex == NULL ) {
 		loop->acceptex = (LPFN_ACCEPTEX)le_getWinsockFuncEx(server->socket, wsaidAcceptex);
 		if( loop->acceptex == NULL ) {
+			closesocket(server->socket);
 			le_setErrorCode(loop, WSAGetLastError());
 			return LE_ERROR;
 		}
 	}
 
 	if( listen(server->socket, backlog) == SOCKET_ERROR ) {
+		closesocket(server->socket);
 		le_setErrorCode(loop, WSAGetLastError());
 		return LE_ERROR;
 	}
 
-	server->masks |= LE_LISTENING;
-	LE_INCREASE_EVENTS(loop);
+	le_addServer(loop, server);
 
 	for(i = 0; i < LE_QUEUED_ACCEPTS_COUNT; ++i) {
 		req = &server->queuedAccepts[i];
 		le_initAcceptReq(server, req);
-		if( le_queueAccept(server, req) == LE_ERROR ) {
-			return LE_ERROR;
-		}
+		le_queueAccept(server, req);
 	}
 
 	return LE_OK;

@@ -6,7 +6,6 @@
 #include <stdio.h>
 #include "lasev.h"
 #include <stdlib.h>
-//#include <vld.h>
 
 #define BUF_SIZE 1024
 
@@ -44,7 +43,7 @@ static void sendMsg(le_TcpConnection* client) {
 	le_WriteReq* req;
 
 	sprintf(buff, "%lu", (unsigned long)le_getNowTime(client->loop));
-	printf("sendMsg: (%lu)%s\n", strlen(buff) + 1, buff);
+	printf("sendMsg: (%lu)%s\n", (long unsigned)strlen(buff) + 1, buff);
 
 	sendbuf.base = (char*)buff;
 	sendbuf.len = strlen(buff) + 1;
@@ -114,6 +113,7 @@ int main() {
 
 	result = le_connect(client, "127.0.0.1", 8611, connectionCB);
 	if( result ) {
+		free(client);
 		errorLog(loop, "le_connect");
 	} else {
 		printf("le_connect success!\n");

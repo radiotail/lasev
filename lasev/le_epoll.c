@@ -126,6 +126,7 @@ static inline void le_serverOver(le_TcpServer* server) {
 static inline void le_initWriteReq(le_TcpConnection* connection, le_WriteReq* req, le_Buffer bufs[], int bufCount, le_writeCB cb) {
 	assert(cb);
 
+	req->data = NULL;
 	req->writeCB = cb;
 	req->bufCount = bufCount;
 	req->bufIndex = 0;
@@ -144,18 +145,19 @@ void le_tcpServerInit(le_EventLoop* loop, le_TcpServer* server, le_connectionCB 
 	assert(connectionCB);
 
 	server->loop = loop;
+	server->data = NULL;
 	server->masks = 0;
 	server->pendingAcceptFd = INVALID_SOCKET;
 	server->connectionCB = connectionCB;
 	server->closeCB = closeCB;
 
-	le_queueAdd(&loop->serverHead, &server->serverNode);
 	le_initBasicEvent(&server->basicEvent, le_serverProcessCB);
 }
 
 static inline void le_connectionProcessCB(le_TcpBasicEvent* event, unsigned events);
 void le_tcpConnectionInit(le_EventLoop* loop, le_TcpConnection* connection, le_connectionCloseCB closeCB) {
 	connection->loop = loop;
+	connection->data = NULL;
 	connection->masks = 0;
 	connection->pendingWriteReqs = 0;
 	connection->writeTotalSize = 0;
@@ -173,6 +175,7 @@ static inline void le_eventLoopInit(le_EventLoop* loop) {
 		le_abort("create epoll fail!(error no: %d)", errno);
 	}
 
+	loop->data = NULL;
 	loop->eventsCount = 0;
 	loop->errorCode = 0;
 	loop->posting = 0;
@@ -190,7 +193,7 @@ static inline void le_eventLoopInit(le_EventLoop* loop) {
 	le_safeQueueInit(&loop->pendingChannels);
 }
 
-static inline int le_addEvent(le_EventLoop* loop, le_TcpBasicEvent* event, unsigned events) {
+static inline void le_addEvent(le_EventLoop* loop, le_TcpBasicEvent* event, unsigned events) {
 	struct epoll_event ee;
 	unsigned mask = event->mask | events;
 
@@ -204,11 +207,9 @@ static inline int le_addEvent(le_EventLoop* loop, le_TcpBasicEvent* event, unsig
 
 		epoll_ctl(loop->epollFd, op, event->fd, &ee);
 	}
-
-	return 0;
 }
 
-static inline int le_delEvent(le_EventLoop* loop,  le_TcpBasicEvent* event, unsigned events) {
+static inline void le_delEvent(le_EventLoop* loop,  le_TcpBasicEvent* event, unsigned events) {
 	struct epoll_event ee;
 	unsigned mask = event->mask & (~events);
 
@@ -222,13 +223,17 @@ static inline int le_delEvent(le_EventLoop* loop,  le_TcpBasicEvent* event, unsi
 
 		epoll_ctl(loop->epollFd, op, event->fd, &ee);
 	}
-
-	return 0;
 }
 
 static inline void le_addConnection(le_EventLoop* loop, le_TcpConnection* connection) {
 	connection->masks |= LE_CONNECTION;
 	le_queueAdd(&loop->connectionsHead, &connection->connectionNode);
+	LE_INCREASE_EVENTS(loop);
+}
+
+static inline void le_addServer(le_EventLoop* loop, le_TcpServer* server) {
+	server->masks |= LE_LISTENING;
+	le_queueAdd(&loop->serverHead, &server->serverNode);
 	LE_INCREASE_EVENTS(loop);
 }
 
@@ -306,6 +311,7 @@ int le_connect(le_TcpConnection* connection, const char* ip, int port, le_connec
 	}
 
 	if( le_setNonBlocking(connection->loop, basicEvent->fd) == LE_ERROR ) {
+		close(basicEvent->fd);
 		le_setErrorCode(connection->loop, errno);
 		return LE_ERROR;
 	}
@@ -316,6 +322,7 @@ int le_connect(le_TcpConnection* connection, const char* ip, int port, le_connec
 			if( errno == EINTR ) {
 				continue;
 			} else if( errno != EINPROGRESS ) {
+				close(basicEvent->fd);
 				le_setErrorCode(connection->loop, errno);
 				return LE_ERROR;
 			}
@@ -411,7 +418,6 @@ static void le_processWriting(le_TcpConnection* connection) {
 	}
 
 	if( n >= 0 ) {
-		size_t len;
 		le_Buffer* buf;
 
 		do {
@@ -643,12 +649,13 @@ int le_connectionClose(le_TcpConnection* connection) {
 
 	connection->masks |= LE_CLOSING;
 	connection->masks |= LE_SHUTDOWN_WRITE;
+	connection->masks &= ~LE_READING;
 
 	if( !(connection->masks & LE_QUEUE_READ) && le_queueEmpty(&connection->writeReqHead) ) {
         le_connectionOver(connection);
 	} else {
 		close(connection->basicEvent.fd);
-		connection->basicEvent.fd == INVALID_SOCKET;
+		connection->basicEvent.fd = INVALID_SOCKET;
 	}
 	//} else if( connection->masks & LE_READING ) {
 	//	le_stopRead(connection);
@@ -690,6 +697,7 @@ static inline void le_serverProcessCB(le_TcpBasicEvent* basicEvent, unsigned eve
     }
 
     if( le_setNonBlocking(server->loop, afd) == LE_ERROR ) {
+		close(afd);
 		le_setErrorCode(server->loop, errno);
 		server->connectionCB(server, LE_ERROR);
 		return;
@@ -791,6 +799,7 @@ int le_channelInit(le_EventLoop* loop, le_Channel* channel, le_channelCB channel
 	}
 
 	channel->loop = loop;
+	channel->data = NULL;
 	channel->masks = 0;
 	channel->pending = 0;
 	channel->channelCB = channelCB;
@@ -881,17 +890,20 @@ int le_bind(le_TcpServer* server, const char * ip, int port) {
 	}
 
 	if( le_setNonBlocking(server->loop, basicEvent->fd) == LE_ERROR ) {
+		close(basicEvent->fd);
 		le_setErrorCode(server->loop, errno);
 		return LE_ERROR;
 	}
 
 	on = 1;
 	if( setsockopt(basicEvent->fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on)) ) {
+		close(basicEvent->fd);
 		le_setErrorCode(server->loop, errno);
     	return LE_ERROR;
 	}
 
 	if( bind(basicEvent->fd, (struct sockaddr*)&addr, sizeof(struct sockaddr)) != 0 ) {
+		close(basicEvent->fd);
 		le_setErrorCode(server->loop, errno);
 		return LE_ERROR;
 	}
@@ -903,17 +915,18 @@ int le_listen(le_TcpServer* server, int backlog) {
 	le_TcpBasicEvent* basicEvent = &server->basicEvent;
 
 	if( basicEvent->fd == INVALID_SOCKET ) {
+		close(basicEvent->fd);
 		le_setErrorCode(server->loop, EINVAL);
 		return LE_ERROR;
 	}
 
 	if( listen(basicEvent->fd, backlog) != 0 ) {
+		close(basicEvent->fd);
 		le_setErrorCode(server->loop, errno);
 		return LE_ERROR;
 	}
 
-	server->masks |= LE_LISTENING;
-	LE_INCREASE_EVENTS(server->loop);
+	le_addServer(server->loop, server);
 	le_addEvent(server->loop, basicEvent, EPOLLIN);
 
 	return LE_OK;

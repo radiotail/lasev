@@ -7,11 +7,10 @@
 #include "lasev.h"
 #include <malloc.h>
 #include <signal.h>
-//#include <vld.h>
 
 #define TEXT_LEN 1024
 static char text[TEXT_LEN] = {0};
-static le_TcpServer* server;
+static le_TcpServer server;
 static le_EventLoop* loop;
 static le_Channel* channel;
 static int rbytes = 0;
@@ -29,7 +28,6 @@ void allocaCB(le_TcpConnection* client, le_Buffer* buf) {
 
 void serverClose(le_TcpServer* server) {
 	printf("server close!!!\n");
-	free(server);
 }
 
 void clientClose(le_TcpConnection* client) {
@@ -58,10 +56,6 @@ static void sendMsg(le_TcpConnection* client, const char* text, int bytes) {
 	int result;
 	le_Buffer sendbuf;
 	le_WriteReq* req;
-
-	/*sendbuf.base = (char*)malloc(65535);
-	memset(sendbuf.base, 0, 65535);
-	sendbuf.len = 65535;*/
 
 	sendbuf.base = (char*)text;
 	memset(sendbuf.base, 0, bytes);
@@ -124,7 +118,7 @@ void channelClose(le_Channel* channel) {
 
 void channelCB(le_Channel* channel, int status) {
 	le_channelClose(channel);
-	le_serverClose(server);
+	le_serverClose(&server);
 }
 
 void onSignal(int s) {
@@ -152,30 +146,29 @@ void unhookSignals() {
 int main() {
 	int result;
 
-	server = (le_TcpServer*)malloc(sizeof(le_TcpServer));
-	channel = (le_Channel*)malloc(sizeof(le_Channel));
-
 	hookSignals();
 	printf("<--------lasev started!-------->\n");
 
 	loop = le_eventLoopCreate();
 
-	le_tcpServerInit(loop, server, connectionCB, serverClose);
-	le_channelInit(loop, channel, channelCB, channelClose);
+	le_tcpServerInit(loop, &server, connectionCB, serverClose);
 
-	result = le_bind(server, "0.0.0.0", 8611);
+	result = le_bind(&server, "0.0.0.0", 8611);
 	if( result ) {
 		errorLog(loop, "le_bind");
 	} else {
 		printf("le_bind success!\n");
 	}
 
-	result = le_listen(server, 511);
-	if( result ) {
+	result = le_listen(&server, 511);
+	if (result) {
 		errorLog(loop, "le_listen");
 	} else {
 		printf("le_listen success!\n");
 	}
+
+	channel = (le_Channel*)malloc(sizeof(le_Channel));
+	le_channelInit(loop, channel, channelCB, channelClose);
 
 	le_run(loop);
 

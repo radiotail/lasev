@@ -14,7 +14,7 @@ static inline void le_timerOver(le_Timer* timer) {
 
 void le_timerInit(le_EventLoop* loop, le_Timer* timer) {
 	timer->loop = loop;
-	
+	timer->data = NULL;
 	timer->masks = 0;
 	timer->index = 0;
 	timer->timeout = 0;

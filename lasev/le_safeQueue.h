@@ -40,10 +40,12 @@ static inline void le_safeQueueSwap(le_safeQueueHead* safeHead, le_Queue* head) 
 	pthread_mutex_unlock(&safeHead->mutex);
 }
 
-static inline void le_safeQueueEmpty(le_safeQueueHead* head, le_Queue* node) {
+static inline int le_safeQueueEmpty(le_safeQueueHead* head, le_Queue* node) {
+	int result;
 	pthread_mutex_lock(&head->mutex);
-	le_queueEmpty(node);
+	result = le_queueEmpty(node);
 	pthread_mutex_unlock(&head->mutex);
+	return result;
 }
 
 static inline void le_safeQueueAdd(le_safeQueueHead* head, le_Queue* node) {
