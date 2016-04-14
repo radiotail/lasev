@@ -7,7 +7,6 @@
 #include "lasev.h"
 #include <stdlib.h>
 #include <signal.h>
-//#include <vld.h>
 
 #define BUF_SIZE 1024
 
@@ -56,8 +55,8 @@ static void sendMsg(le_TcpConnection* client) {
 	le_Buffer sendbuf;
 	le_WriteReq* req;
 
-	sendbuf.base = (char*)msgText;
-	sendbuf.len  = msgLen;
+	sendbuf.base = msgText;
+	sendbuf.len = msgLen;
 	req = (le_WriteReq*)malloc(sizeof(le_WriteReq));
 
 	result = le_write(client, req, &sendbuf, 1, writeCB);
@@ -133,6 +132,7 @@ int main(int argc, char **argv) {
 
 		result = le_connect(client, "127.0.0.1", 8611, connectionCB);
 		if( result ) {
+			free(client);
 			errorLog(loop, "le_connect");
 		}
 	}

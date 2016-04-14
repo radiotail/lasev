@@ -7,7 +7,6 @@
 #include "lasev.h"
 #include <malloc.h>
 #include <signal.h>
-//#include <vld.h>
 
 #define SEND_CHANNEL_COUNT 10
 #define TEXT_LEN 64
@@ -114,7 +113,10 @@ void channelClose(le_Channel* channel) {
 
 void channelCB(le_Channel* channel, int status) {
 	le_channelClose(channel);
-	le_serverClose(server);
+
+	if (server) {
+		le_serverClose(server);
+	}
 }
 
 void onSignal(int s) {
@@ -174,15 +176,19 @@ int main() {
 	result = le_bind(server, "0.0.0.0", 8611);
 	if( result ) {
 		errorLog(loop, "le_bind");
+		free(server);
+		server = NULL;
 	} else {
 		printf("le_bind success!\n");
-	}
 
-	result = le_listen(server, 511);
-	if( result ) {
-		errorLog(loop, "le_listen");
-	} else {
-		printf("le_listen success!\n");
+		result = le_listen(server, 511);
+		if (result) {
+			errorLog(loop, "le_listen");
+			free(server);
+			server = NULL;
+		} else {
+			printf("le_listen success!\n");
+		}
 	}
 
 	for( i = 0; i < SEND_CHANNEL_COUNT; ++i ) {
