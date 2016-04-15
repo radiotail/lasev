@@ -61,7 +61,7 @@ static void sendMsg(le_TcpConnection* client, const char* text, int bytes) {
 }
 
 void readCB(le_TcpConnection* client, int bytes, char* buf) {
-	if( bytes <= 0 ) {
+	if( bytes == LE_ERROR ) {
 		errorLog(client->loop, "readCB");
 		le_connectionClose(client);
 		return;
@@ -70,7 +70,7 @@ void readCB(le_TcpConnection* client, int bytes, char* buf) {
 	rbytes += bytes;
 	printf("readCB text len: %d, %s\n", bytes, buf);
 
-	if (read_counter++ >= 0) {
+	if( read_counter++ >= 0 ) {
 		le_connectionClose(client);
 	} else {
 		sendMsg(client, buf, bytes);

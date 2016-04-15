@@ -67,12 +67,11 @@ static void sendMsg(le_TcpConnection* client) {
 }
 
 void readCB(le_TcpConnection* client, int bytes, char* buf) {
-	if( bytes <= 0 ) {
+	if( bytes == LE_ERROR ) {
 		le_connectionClose(client);
 		return;
 	}
 	
-	//printf("read cb: %p, %s\n", client, buf);
 	readMsgTimes++;
 	readMsgtBytes += bytes;
 

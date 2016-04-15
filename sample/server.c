@@ -72,7 +72,16 @@ static void sendMsg(le_TcpConnection* client, const char* text, int bytes) {
 }
 
 void readCB(le_TcpConnection* client, int bytes, char* buf) {
-	if( bytes < 0 ) {
+	int err;
+
+	if (bytes == LE_ERROR) {
+		err = le_getErrorCode(client->loop);
+		if (err == LE_OK) {
+			printf("client closed!\n");
+		} else {
+			errorLog(client->loop, "readCB");
+		}
+		
 		le_connectionClose(client);
 		return;
 	}
