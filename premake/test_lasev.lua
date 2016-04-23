@@ -32,6 +32,9 @@ solution "test_lasev"
 	language "C"
 	targetdir "../bin"
 	links {"lasev"}
+	if os.is("linux") then
+		links {"pthread", "rt"}
+	end
 
     files {"../sample/timer_client.c"}
 	
@@ -43,6 +46,9 @@ solution "test_lasev"
 	language "C"
 	targetdir "../bin"
 	links {"lasev"}
+	if os.is("linux") then
+		links {"pthread", "rt"}
+	end
 
     files {"../sample/echo_client.c"}
 	
@@ -54,6 +60,9 @@ solution "test_lasev"
 	language "C"
 	targetdir "../bin"
 	links {"lasev"}
+	if os.is("linux") then
+		links {"pthread", "rt"}
+	end
 
     files {"../sample/bench_client.c"}
 	
@@ -67,7 +76,7 @@ solution "test_lasev"
 	links {"lasev"}
 
 	if os.is("linux") then
-		links {"pthread"}
+		links {"pthread", "rt"}
 	end
 
     files {"../sample/channel.c"}

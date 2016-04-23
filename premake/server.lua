@@ -32,6 +32,9 @@ solution "server"
 	language "C"
 	targetdir "../bin"
 	links {"lasev"}
+	if os.is("linux") then
+		links {"pthread", "rt"}
+	end
 
     files {"../sample/server.c"}
 	
