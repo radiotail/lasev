@@ -471,7 +471,7 @@ int le_write(le_TcpConnection* connection, le_WriteReq* req, le_Buffer bufs[], i
 	if( bufCount <= LE_ARRAY_SIZE(req->bufsml) ) {
 		req->bufs = req->bufsml;
 	} else {
-		req->bufs = malloc(bufCount * sizeof(le_Buffer));
+		req->bufs = le_malloc(bufCount * sizeof(le_Buffer));
 	}
 
 	le_initWriteReqBufs(req, bufs, bufCount);
